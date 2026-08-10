@@ -4,6 +4,20 @@
     "description": "签到模板管理",
     "hint": "上传后请保存配置。",
     "items": {
+      "active_template": {
+        "type": "string",
+        "description": "当前模板",
+        "hint": "上传保存后刷新列表。",
+        "options": [
+          "default",
+          "tpl_fb516978e6e841458199c80ad1f6bcc5"
+        ],
+        "labels": [
+          "官方默认模板",
+          "夏娜"
+        ],
+        "default": "default"
+      },
       "packages": {
         "type": "file",
         "description": "模板 ZIP",
@@ -20,6 +34,33 @@
         "default": true
       }
     }
+  },
+  "command_prefix_mode": {
+    "type": "string",
+    "description": "指令前缀",
+    "hint": "选择签到触发方式。",
+    "options": [
+      "slash",
+      "none",
+      "hash",
+      "custom"
+    ],
+    "labels": [
+      "/ 斜杠",
+      "无前缀",
+      "# 井号",
+      "自定义"
+    ],
+    "default": "slash"
+  },
+  "custom_command_prefix": {
+    "type": "string",
+    "description": "自定义前缀",
+    "hint": "最长 16 字符，不含空格。",
+    "condition": {
+      "command_prefix_mode": "custom"
+    },
+    "default": "!"
   },
   "timezone": {
     "type": "string",

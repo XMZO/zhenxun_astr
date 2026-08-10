@@ -83,6 +83,55 @@ CARD_WIDTH = 465
 CARD_HEIGHT = 926
 MAX_AVATAR_BYTES = 2 * 1024 * 1024
 TEMPLATE_UPLOAD_PREFIX = "files/template_management/packages/"
+SIGN_COMMAND_NAMES = ("签到", "打卡")
+INFO_COMMAND_NAMES = ("我的签到", "签到状态")
+COMMAND_PREFIXES = {
+    "slash": "/",
+    "none": "",
+    "hash": "#",
+}
+_runtime_command_prefix = "/"
+
+
+def _resolve_command_prefix(config: dict[str, Any]) -> str:
+    mode = str(config.get("command_prefix_mode", "slash") or "slash").lower()
+    if mode != "custom":
+        return COMMAND_PREFIXES.get(mode, "/")
+    custom = str(config.get("custom_command_prefix", "!") or "").strip()
+    if not custom or len(custom) > 16 or any(char.isspace() for char in custom):
+        return "!"
+    return custom
+
+
+def _set_runtime_command_prefix(prefix: str) -> None:
+    global _runtime_command_prefix
+    _runtime_command_prefix = prefix
+
+
+def _event_command_text(event: AstrMessageEvent) -> str:
+    message_obj = getattr(event, "message_obj", None)
+    original = getattr(message_obj, "message_str", None)
+    if isinstance(original, str):
+        return original.strip()
+    return str(event.get_message_str() or "").strip()
+
+
+def _matches_configured_command(
+    event: AstrMessageEvent,
+    command_names: tuple[str, ...],
+) -> bool:
+    message = _event_command_text(event)
+    return any(message == f"{_runtime_command_prefix}{name}" for name in command_names)
+
+
+class _SignCommandFilter(filter.CustomFilter):
+    def filter(self, event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
+        return _matches_configured_command(event, SIGN_COMMAND_NAMES)
+
+
+class _InfoCommandFilter(filter.CustomFilter):
+    def filter(self, event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
+        return _matches_configured_command(event, INFO_COMMAND_NAMES)
 
 
 class ZhenxunSign(Star):
@@ -94,7 +143,9 @@ class ZhenxunSign(Star):
         config: AstrBotConfig | None = None,
     ) -> None:
         super().__init__(context, config)
-        self.config = config or {}
+        self.config = config if config is not None else {}
+        self.command_prefix = _resolve_command_prefix(self.config)
+        _set_runtime_command_prefix(self.command_prefix)
         self.timezone_name = str(
             self.config.get("timezone", "Asia/Shanghai") or "Asia/Shanghai"
         )
@@ -103,7 +154,6 @@ class ZhenxunSign(Star):
         plugin_name = getattr(self, "name", "astrbot_plugin_zhenxun_sign")
         self.data_dir = Path(get_astrbot_data_path()) / "plugin_data" / plugin_name
         self.store = SignStore(self.data_dir / "sign_data.json")
-        self.active_template_path = self.data_dir / "active_template.txt"
         self.plugin_root = Path(__file__).parent
         self.template_path = self.plugin_root / "sign_card.html"
         self.style_path = self.plugin_root / "sign_card.css"
@@ -126,9 +176,13 @@ class ZhenxunSign(Star):
         }
 
     async def initialize(self) -> None:
+        await asyncio.to_thread(self._migrate_legacy_template_selection)
         await asyncio.to_thread(self._import_configured_template_packages)
+        packs, _ = await asyncio.to_thread(self._discover_templates)
+        await asyncio.to_thread(self._normalise_selected_template, packs)
+        self._sync_template_schema(packs)
 
-    @filter.command("签到", alias={"打卡"})
+    @filter.custom_filter(_SignCommandFilter)
     async def sign(self, event: AstrMessageEvent):
         """Record today's sign-in and return the original zhenxun-style card."""
         template_pack = self._active_template()
@@ -161,7 +215,7 @@ class ZhenxunSign(Star):
         )
         yield await self._render_or_text(event, card_data, template_pack)
 
-    @filter.command("我的签到", alias={"签到状态"})
+    @filter.custom_filter(_InfoCommandFilter)
     async def my_sign(self, event: AstrMessageEvent):
         """Return the user's current sign-in card without changing state."""
         template_pack = self._active_template()
@@ -185,68 +239,6 @@ class ZhenxunSign(Star):
         )
         self.logger.info("My sign command handled: user=%s", user_id)
         yield await self._render_or_text(event, card_data, template_pack)
-
-    @filter.command("签到模板")
-    async def list_templates(self, event: AstrMessageEvent):
-        """List all automatically discovered sign template packs."""
-        packs, errors = self._discover_templates()
-        active_pack = self._active_template(packs)
-        lines = [
-            f"当前签到模板：{active_pack.name}",
-            "",
-            "可用模板：",
-        ]
-        for index, pack in enumerate(packs.values(), start=1):
-            marker = "*" if pack.id == active_pack.id else "-"
-            source_label = {
-                "legacy": "内置",
-                "folder": "文件夹",
-                "zip": "ZIP",
-            }.get(pack.source_kind, pack.source_kind)
-            lines.append(f"{marker} #{index} {pack.name} | {source_label}")
-        lines.extend(["", "管理员可发送：切换签到模板 <模板名称或#序号>"])
-        if errors:
-            lines.extend(["", f"另有 {len(errors)} 个无效模板包已忽略。"])
-        import_report = self._template_import_report
-        if import_report["checked"]:
-            lines.extend(
-                [
-                    "",
-                    (
-                        "设置页最近导入："
-                        f"新增 {len(import_report['installed'])}，"
-                        f"更新 {len(import_report['updated'])}，"
-                        f"无需更新 {len(import_report['unchanged'])}，"
-                        f"失败 {len(import_report['errors'])}。"
-                    ),
-                ]
-            )
-            if import_report["activated"]:
-                lines.append(f"已自动切换：{import_report['activated']}")
-            for error in import_report["errors"][:3]:
-                lines.append(f"- {error}")
-        yield event.plain_result("\n".join(lines))
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("切换签到模板")
-    async def switch_template(self, event: AstrMessageEvent, template_name: str):
-        """Select an automatically discovered template pack."""
-        packs, _ = self._discover_templates()
-        requested = str(template_name or "").strip()
-        try:
-            selected = self._resolve_template_selector(packs, requested)
-        except ValueError as error:
-            yield event.plain_result(str(error))
-            return
-        if selected is None:
-            available = "、".join(pack.name for pack in packs.values())
-            yield event.plain_result(
-                f"未找到签到模板 {requested or '<空>'}。可用模板：{available}"
-            )
-            return
-
-        await asyncio.to_thread(self._save_active_template_id, selected.id)
-        yield event.plain_result(f"签到模板已切换为：{selected.name}")
 
     def _import_configured_template_packages(self) -> None:
         report: dict[str, Any] = {
@@ -296,7 +288,7 @@ class ZhenxunSign(Star):
 
         if changed_packs and bool(management.get("activate_latest", True)):
             selected = changed_packs[-1]
-            self._save_active_template_id(selected.id)
+            self._set_selected_template_id(selected.id, persist=True)
             report["activated"] = selected.name
 
         self._template_import_report = report
@@ -368,47 +360,68 @@ class ZhenxunSign(Star):
         )
 
     def _selected_template_id(self) -> str:
-        try:
-            selected_id = self.active_template_path.read_text(encoding="utf-8").strip()
-        except OSError:
-            selected_id = ""
-        if not selected_id:
-            selected_id = str(
-                self.config.get("template_pack", "default") or "default"
-            ).strip()
+        management = self.config.get("template_management", {})
+        selected_id = (
+            management.get("active_template", "default")
+            if isinstance(management, dict)
+            else "default"
+        )
+        selected_id = str(selected_id or "default").strip()
         return selected_id.lower() or "default"
 
-    def _save_active_template_id(self, template_id: str) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        temporary_path = self.active_template_path.with_suffix(".tmp")
-        temporary_path.write_text(f"{template_id}\n", encoding="utf-8")
-        temporary_path.replace(self.active_template_path)
+    def _migrate_legacy_template_selection(self) -> None:
+        legacy_path = self.data_dir / "active_template.txt"
+        try:
+            legacy_id = legacy_path.read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            return
+        if legacy_id and self._selected_template_id() == "default":
+            self._set_selected_template_id(legacy_id, persist=True)
+        legacy_path.unlink(missing_ok=True)
 
-    @staticmethod
-    def _resolve_template_selector(
+    def _set_selected_template_id(
+        self, template_id: str, persist: bool = False
+    ) -> None:
+        management = self.config.get("template_management", {})
+        if not isinstance(management, dict):
+            management = {}
+            self.config["template_management"] = management
+        management["active_template"] = template_id
+        if persist:
+            save_config = getattr(self.config, "save_config", None)
+            if callable(save_config):
+                save_config()
+
+    def _normalise_selected_template(
+        self,
         packs: dict[str, TemplatePack],
-        selector: str,
-    ) -> TemplatePack | None:
-        values = list(packs.values())
-        stripped = selector.strip()
-        ordinal_text = stripped[1:] if stripped.startswith("#") else stripped
-        if ordinal_text.isdigit():
-            ordinal = int(ordinal_text)
-            return values[ordinal - 1] if 1 <= ordinal <= len(values) else None
+    ) -> TemplatePack:
+        selected_id = self._selected_template_id()
+        selected = self._find_template_by_internal_id(packs, selected_id)
+        if selected is None:
+            selected = packs["default"]
+        if selected.id != selected_id:
+            self._set_selected_template_id(selected.id, persist=True)
+        return selected
 
-        normalised = stripped.casefold()
-        name_matches = [pack for pack in values if pack.name.casefold() == normalised]
-        if len(name_matches) == 1:
-            return name_matches[0]
-        if len(name_matches) > 1:
-            raise ValueError(
-                f"存在多个名为“{stripped}”的模板，请发送“签到模板”后使用 #序号切换。"
-            )
+    def _sync_template_schema(self, packs: dict[str, TemplatePack]) -> None:
+        schema = getattr(self.config, "schema", None)
+        if not isinstance(schema, dict):
+            return
+        management = schema.get("template_management", {})
+        items = management.get("items", {}) if isinstance(management, dict) else {}
+        field = items.get("active_template") if isinstance(items, dict) else None
+        if not isinstance(field, dict):
+            return
 
-        return ZhenxunSign._find_template_by_internal_id(
-            packs,
-            stripped.lower(),
-        )
+        name_counts: dict[str, int] = {}
+        labels: list[str] = []
+        for pack in packs.values():
+            count = name_counts.get(pack.name, 0) + 1
+            name_counts[pack.name] = count
+            labels.append(pack.name if count == 1 else f"{pack.name} ({count})")
+        field["options"] = list(packs)
+        field["labels"] = labels
 
     def _identity(
         self,
