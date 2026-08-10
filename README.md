@@ -91,12 +91,12 @@ AstrBot 的远程 T2I 服务不能读取插件机器上的 `file://` 路径，�
 
 ## 本地预览与修改
 
-可视化编辑器保存在同一仓库的 [`editor` 分支](https://github.com/XMZO/zhenxun_astr/tree/editor)，不会随 AstrBot 的默认分支安装。它支持实时预览、素材替换、图层选框、拖动、八向拉伸、撤销/重做和恢复原版。
+可视化编辑器保存在同一仓库的 [`editor-v0.2.0` 标签](https://github.com/XMZO/zhenxun_astr/tree/editor-v0.2.0)，不会随 AstrBot 的默认分支安装。它支持实时预览、素材替换、图层选框、拖动、八向拉伸、撤销/重做和恢复原版。
 
 单独获取编辑器：
 
 ```powershell
-git clone --branch editor --single-branch https://github.com/XMZO/zhenxun_astr.git
+git clone --branch editor-v0.2.0 --single-branch https://github.com/XMZO/zhenxun_astr.git
 cd zhenxun_astr
 cd template_editor
 uv run editor_server.py
@@ -114,7 +114,7 @@ uv run editor_server.py
 
 ## 基础预览服务器
 
-直接双击 `sign_card.html` 看不到最终效果，因为它是带 Jinja 变量的模板，图片和字体也会在运行时注入。`editor` 分支提供了一个不依赖 AstrBot 的本地预览服务器；先按上一节获取该分支，再在仓库根目录运行：
+直接双击 `sign_card.html` 看不到最终效果，因为它是带 Jinja 变量的模板，图片和字体也会在运行时注入。`editor-v0.2.0` 标签提供了一个不依赖 AstrBot 的本地预览服务器；先按上一节获取该版本，再在仓库根目录运行：
 
 ```powershell
 uv run --with jinja2 preview.py
