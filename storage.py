@@ -13,7 +13,7 @@ from typing import Any
 class SignStore:
     """Persist sign-in records without a fixed calendar range."""
 
-    schema_version = 1
+    schema_version = 2
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -39,15 +39,22 @@ class SignStore:
         """
         async with self._lock:
             data = await asyncio.to_thread(self._read_sync)
+            data_changed = self._ensure_uids(data)
             raw_record = data["users"].get(key)
-            return deepcopy(
-                self._normalize_record(
-                    raw_record,
-                    user_id=user_id,
-                    platform=platform,
-                    display_name=display_name,
-                )
+            record = self._normalize_record(
+                raw_record,
+                user_id=user_id,
+                platform=platform,
+                display_name=display_name,
             )
+            if record["uid"] <= 0:
+                record["uid"] = self._allocate_uid(data)
+                data_changed = True
+            data["users"][key] = record
+            if data_changed:
+                data["schema_version"] = self.schema_version
+                await asyncio.to_thread(self._write_sync, data)
+            return deepcopy(record)
 
     async def sign(
         self,
@@ -79,6 +86,7 @@ class SignStore:
 
         async with self._lock:
             data = await asyncio.to_thread(self._read_sync)
+            data_changed = self._ensure_uids(data)
             raw_record = data["users"].get(key)
             record = self._normalize_record(
                 raw_record,
@@ -86,9 +94,16 @@ class SignStore:
                 platform=platform,
                 display_name=display_name,
             )
+            if record["uid"] <= 0:
+                record["uid"] = self._allocate_uid(data)
+                data_changed = True
 
             record["display_name"] = display_name or record["display_name"]
+            data["users"][key] = record
             if record["last_sign_date"] == normalized_today:
+                if data_changed:
+                    data["schema_version"] = self.schema_version
+                    await asyncio.to_thread(self._write_sync, data)
                 return deepcopy(record), False
 
             record["sign_count"] += 1
@@ -156,6 +171,7 @@ class SignStore:
         return {
             "schema_version": cls.schema_version,
             "updated_at": "",
+            "next_uid": 0,
             "users": {},
         }
 
@@ -170,6 +186,7 @@ class SignStore:
             "user_id": user_id,
             "platform": platform,
             "display_name": display_name,
+            "uid": 0,
             "sign_count": 0,
             "last_sign_date": "",
             "last_sign_at": "",
@@ -195,6 +212,7 @@ class SignStore:
         record["user_id"] = str(record.get("user_id") or user_id)
         record["platform"] = str(record.get("platform") or platform)
         record["display_name"] = str(record.get("display_name") or display_name)
+        record["uid"] = cls._non_negative_int(record.get("uid"))
         record["sign_count"] = cls._non_negative_int(record.get("sign_count"))
         record["last_sign_date"] = cls.normalize_date(record.get("last_sign_date"))
         record["last_sign_at"] = str(record.get("last_sign_at") or "")
@@ -242,6 +260,50 @@ class SignStore:
         except (TypeError, ValueError):
             return 0
 
+    @classmethod
+    def _allocate_uid(cls, data: dict[str, Any]) -> int:
+        next_uid = cls._non_negative_int(data.get("next_uid")) + 1
+        data["next_uid"] = next_uid
+        return next_uid
+
+    @classmethod
+    def _ensure_uids(cls, data: dict[str, Any]) -> bool:
+        users = data.get("users")
+        if not isinstance(users, dict):
+            return False
+
+        changed = False
+        next_uid = cls._non_negative_int(data.get("next_uid"))
+        if data.get("next_uid") != next_uid:
+            data["next_uid"] = next_uid
+            changed = True
+
+        used_uids: set[int] = set()
+        missing_records: list[dict[str, Any]] = []
+        for raw_record in users.values():
+            if not isinstance(raw_record, dict):
+                continue
+            uid = cls._non_negative_int(raw_record.get("uid"))
+            if uid > 0 and uid not in used_uids:
+                if raw_record.get("uid") != uid:
+                    raw_record["uid"] = uid
+                    changed = True
+                used_uids.add(uid)
+                next_uid = max(next_uid, uid)
+            else:
+                missing_records.append(raw_record)
+
+        for raw_record in missing_records:
+            next_uid += 1
+            raw_record["uid"] = next_uid
+            used_uids.add(next_uid)
+            changed = True
+
+        if data.get("next_uid") != next_uid:
+            data["next_uid"] = next_uid
+            changed = True
+        return changed
+
     def _read_sync(self) -> dict[str, Any]:
         if not self.path.exists():
             return self._empty_data()
@@ -263,6 +325,7 @@ class SignStore:
             return self._empty_data()
         if not isinstance(loaded.get("users"), dict):
             loaded["users"] = {}
+        loaded["next_uid"] = self._non_negative_int(loaded.get("next_uid"))
         loaded["schema_version"] = self.schema_version
         return loaded
 

@@ -196,7 +196,9 @@ class ZhenxunSign(Star):
                 self.logger.info("Sign cards will use the local browser renderer")
             else:
                 self.logger.warning(
-                    "Local sign renderer is unavailable; using the remote T2I renderer"
+                    "Local sign renderer is unavailable; using the remote T2I "
+                    "renderer: %s",
+                    self.local_renderer.failure_reason or "unknown error",
                 )
 
     async def terminate(self) -> None:
@@ -562,7 +564,10 @@ class ZhenxunSign(Star):
             "is_card_view": mode == "view",
             "user": {
                 "nickname": display_name,
-                "uid_str": self._format_uid(str(record.get("user_id") or "")),
+                "uid_str": self._format_uid(
+                    str(record.get("user_id") or ""),
+                    record.get("uid"),
+                ),
                 "avatar_source": self._avatar_source(
                     event,
                     format_values,
@@ -1050,12 +1055,12 @@ body {
             messages[key] = default if configured is None else str(configured)
         return messages
 
-    def _format_uid(self, user_id: str) -> str:
-        if not bool(self.config.get("show_user_id", True)):
-            return "XXXX XXXX XXXX"
-
-        configured = self._config_text("uid_value", "")
-        uid = configured or user_id
+    def _format_uid(self, user_id: str, internal_uid: Any = None) -> str:
+        if bool(self.config.get("show_user_id", True)):
+            configured = self._config_text("uid_value", "")
+            uid = configured or user_id
+        else:
+            uid = str(internal_uid or "").strip()
         if uid.isdigit():
             normalized = uid.rjust(12, "0")[-12:]
             return f"{normalized[:4]} {normalized[4:8]} {normalized[8:]}"

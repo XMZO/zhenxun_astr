@@ -9,6 +9,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from jinja2 import Environment, select_autoescape
+from playwright.async_api import async_playwright
+
 
 class LocalRenderUnavailable(RuntimeError):
     """Raised when the optional local browser renderer cannot be used."""
@@ -46,6 +49,10 @@ class LocalHtmlRenderer:
                 return False
         return True
 
+    @property
+    def failure_reason(self) -> str | None:
+        return self._failure
+
     async def start(self) -> bool:
         if self.available:
             return True
@@ -60,8 +67,6 @@ class LocalHtmlRenderer:
             self._start_attempted = True
 
             try:
-                from playwright.async_api import async_playwright
-
                 playwright = await async_playwright().start()
                 browser = await self._launch_browser(playwright)
                 context = await browser.new_context(
@@ -95,6 +100,7 @@ class LocalHtmlRenderer:
             self._playwright = playwright
             self._browser = browser
             self._context = context
+            self._failure = None
             self.logger.info("Local sign renderer is ready")
             return True
 
@@ -170,8 +176,6 @@ class LocalHtmlRenderer:
                 compiled = self._template_cache.get(template_key)
                 if compiled is None:
                     try:
-                        from jinja2 import Environment, select_autoescape
-
                         environment = Environment(
                             autoescape=select_autoescape(["html", "xml"]),
                             cache_size=32,

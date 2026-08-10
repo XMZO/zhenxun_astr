@@ -86,8 +86,8 @@
   },
   "show_user_id": {
     "type": "bool",
-    "description": "显示用户 ID",
-    "hint": "关闭后隐藏真实 ID。",
+    "description": "显示真实 ID",
+    "hint": "关闭后显示内部序号。",
     "default": true
   },
   "uid_value": {
