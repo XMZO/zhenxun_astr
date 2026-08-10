@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        {{ sign_style | safe }}
+    </style>
+</head>
+<body>
+<div class="wrapper">
+    <div class="top-head">
+        <div style="display: flex;">
+            <div class="avatar">
+                <img class="avatar-img" src="{{ assets.avatar_url }}" alt="">
+            </div>
+            <div style="position: relative;">
+                <p class="nickname" style="font-size: {{ user.font_size }}px;">{{ user.nickname }}</p>
+                <p class="uid">{{ labels.uid_prefix }}{{ user.uid_str }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="sign-content">
+        <div class="sign-bottom"></div>
+        <div class="sign-top">
+            <img class="rl-img" src="{{ assets.calendar }}" alt="">
+            <img class="zx-img" src="{{ assets.main_character }}" alt="">
+            <p class="text-day">{{ labels.sign_count_prefix }}{{ user.sign_count }}{{ labels.sign_count_suffix }}</p>
+            <p class="text-zx">{{ bot_message }}</p>
+        </div>
+    </div>
+    <div class="sign-data">
+        <img class="qian" src="{{ assets.tag }}" alt="">
+
+        {% if not is_card_view %}
+        <p class="today-text">{{ labels.sign_title }}</p>
+        <div class="abs-text" style="top: 42px;">
+            <p class="gift">{{ reward.primary_text }}</p>
+        </div>
+        <div class="abs-text" style="top: 83px;">
+            <p class="gift">{{ reward.gold_text }}</p>
+        </div>
+        <div class="abs-text" style="top: 123px;">
+            <p class="gift">{{ reward.item_text }}</p>
+        </div>
+        {% else %}
+        <p class="today-text">{{ labels.info_title }}</p>
+        <div class="abs-text" style="top: 42px;">
+            <p class="gift">{{ info.primary_text }}</p>
+        </div>
+        <div class="abs-text" style="top: 83px;">
+            <p class="gift">{{ info.gold_text }}</p>
+        </div>
+        <div class="abs-text" style="top: 123px;">
+            <p class="gift">{{ info.item_text }}</p>
+        </div>
+        {% endif %}
+    </div>
+    <div class="line"></div>
+    <div class="bottom-foot">
+        <p class="cur-text">{{ reserved.current_label }}{{ reserved.separator }}{{ reserved.current }}</p>
+        <div class="heart-list">
+            {% for heart in reserved.heart2 %}
+            <img class="heart-img" src="{{ assets.heart_full }}" alt="" />
+            {% endfor %}
+            {% for heart in reserved.heart1 %}
+            <img class="heart-img" src="{{ assets.heart_empty }}" alt="" />
+            {% endfor %}
+        </div>
+        <div class="bot-text">
+            <p style="position: absolute; top: 9px">{{ reserved.level_label }}{{ reserved.separator }}{{ reserved.level_text }}</p>
+            <p style="position: absolute; top: 58px">{{ reserved.attitude }}</p>
+            <p style="position: absolute; top: 111px">{{ reserved.next_text }}</p>
+        </div>
+        <div class="progress-border">
+            <div class="progress-bar" style="width: {{ reserved.progress }}%;"></div>
+        </div>
+        <img class="weather-img" src="{{ assets.weather }}" alt="">
+        <p class="wd">{{ page.temperature }}{{ labels.temperature_suffix }}</p>
+        <img class="mbl-img" src="{{ assets.footer_character }}" alt="">
+        <div class="date">{{ page.date_str }}</div>
+    </div>
+</div>
+</body>
+</html>

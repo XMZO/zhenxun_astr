@@ -1,0 +1,8 @@
+name: astrbot_plugin_zhenxun_sign
+display_name: 真寻签到
+author: XMZO
+version: 0.2.0
+desc: 真寻风格的每日签到、多模板管理和可自定义签到卡片
+short_desc: 真寻风格签到与可视化模板包
+repo: https://github.com/XMZO/zhenxun_astr
+astrbot_version: ">=4.27,<5"
