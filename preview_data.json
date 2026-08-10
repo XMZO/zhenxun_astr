@@ -1,0 +1,48 @@
+{
+  "is_card_view": false,
+  "mode": "sign",
+  "user": {
+    "nickname": "预览用户",
+    "uid_str": "XXXX XXXX XXXX",
+    "font_size": 45,
+    "sign_count": 7,
+    "avatar_file": "img/1.png"
+  },
+  "reward": {
+    "primary_text": "签到成功",
+    "gold_text": "金币 +0",
+    "item_text": "暂无道具"
+  },
+  "info": {
+    "primary_text": "累计签到：7 天",
+    "gold_text": "总金币：0",
+    "item_text": "上次签到：2026-08-10"
+  },
+  "reserved": {
+    "current_label": "当前好感度",
+    "current": "--",
+    "level_label": "好感度等级",
+    "level_text": "未接入",
+    "attitude": "对你的态度: 未接入",
+    "next_text": "距离升级还差--好感度",
+    "separator": ": ",
+    "progress": 0,
+    "heart2": [],
+    "heart1": [true, true, true, true, true, true, true, true]
+  },
+  "page": {
+    "date_str": "2026-08-10 12:34:56",
+    "weather_icon_name": "0.png",
+    "temperature": 23,
+    "tag_icon_name": "0.png"
+  },
+  "bot_message": "真寻说: 真寻希望你开心！",
+  "labels": {
+    "uid_prefix": "UID:",
+    "sign_count_prefix": "累计签到",
+    "sign_count_suffix": "天",
+    "sign_title": "今日签到",
+    "info_title": "我的信息",
+    "temperature_suffix": "℃"
+  }
+}
