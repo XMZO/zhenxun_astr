@@ -35,6 +35,22 @@
       }
     }
   },
+  "render_backend": {
+    "type": "string",
+    "description": "图片渲染方式",
+    "hint": "自动优先本地。",
+    "options": [
+      "auto",
+      "local",
+      "remote"
+    ],
+    "labels": [
+      "自动（推荐）",
+      "本地浏览器",
+      "远程 T2I"
+    ],
+    "default": "auto"
+  },
   "command_prefix_mode": {
     "type": "string",
     "description": "指令前缀",

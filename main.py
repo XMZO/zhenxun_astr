@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import random
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from PIL import Image
 
+from .local_renderer import LocalHtmlRenderer
 from .storage import SignStore
 from .template_pack import TemplatePack, TemplatePackError, TemplateRegistry
 
@@ -90,6 +92,7 @@ COMMAND_PREFIXES = {
     "none": "",
     "hash": "#",
 }
+RENDER_BACKENDS = {"auto", "local", "remote"}
 _runtime_command_prefix = "/"
 
 
@@ -101,6 +104,11 @@ def _resolve_command_prefix(config: dict[str, Any]) -> str:
     if not custom or len(custom) > 16 or any(char.isspace() for char in custom):
         return "!"
     return custom
+
+
+def _resolve_render_backend(config: dict[str, Any]) -> str:
+    backend = str(config.get("render_backend", "auto") or "auto").lower()
+    return backend if backend in RENDER_BACKENDS else "auto"
 
 
 def _set_runtime_command_prefix(prefix: str) -> None:
@@ -145,6 +153,7 @@ class ZhenxunSign(Star):
         super().__init__(context, config)
         self.config = config if config is not None else {}
         self.command_prefix = _resolve_command_prefix(self.config)
+        self.render_backend = _resolve_render_backend(self.config)
         _set_runtime_command_prefix(self.command_prefix)
         self.timezone_name = str(
             self.config.get("timezone", "Asia/Shanghai") or "Asia/Shanghai"
@@ -165,6 +174,7 @@ class ZhenxunSign(Star):
         self._asset_bundles: dict[str, tuple[str, dict[str, Any]]] = {}
         self._asset_lock = asyncio.Lock()
         self._avatar_cache: dict[str, str] = {}
+        self.local_renderer = LocalHtmlRenderer(self.logger)
         self._template_error_snapshot: tuple[str, ...] = ()
         self._template_import_report: dict[str, Any] = {
             "checked": 0,
@@ -181,6 +191,16 @@ class ZhenxunSign(Star):
         packs, _ = await asyncio.to_thread(self._discover_templates)
         await asyncio.to_thread(self._normalise_selected_template, packs)
         self._sync_template_schema(packs)
+        if self.render_backend != "remote":
+            if await self.local_renderer.start():
+                self.logger.info("Sign cards will use the local browser renderer")
+            else:
+                self.logger.warning(
+                    "Local sign renderer is unavailable; using the remote T2I renderer"
+                )
+
+    async def terminate(self) -> None:
+        await self.local_renderer.close()
 
     @filter.custom_filter(_SignCommandFilter)
     async def sign(self, event: AstrMessageEvent):
@@ -701,11 +721,57 @@ class ZhenxunSign(Star):
         card_data: dict[str, Any],
         template_pack: TemplatePack,
     ):
+        render_started = time.perf_counter()
         template = await asyncio.to_thread(
             template_pack.read_text,
             template_pack.template_file,
         )
         render_data = await self._prepare_render_data(card_data, template_pack)
+        image_path, backend = await self._render_template_image(
+            template,
+            render_data,
+            template_pack,
+        )
+        image_path = await asyncio.to_thread(
+            self._crop_card,
+            image_path,
+            template_pack.width,
+            template_pack.height,
+        )
+        self.logger.debug("Sign card rendered with %s backend", backend)
+        self.logger.debug(
+            "Sign card total render time: %.0f ms",
+            (time.perf_counter() - render_started) * 1000,
+        )
+        return event.image_result(image_path)
+
+    async def _render_template_image(
+        self,
+        template: str,
+        render_data: dict[str, Any],
+        template_pack: TemplatePack,
+    ) -> tuple[str, str]:
+        render_started = time.perf_counter()
+        if self.render_backend != "remote" and await self.local_renderer.start():
+            try:
+                image_path = await self.local_renderer.render(
+                    template,
+                    render_data,
+                    width=template_pack.width,
+                    height=template_pack.height,
+                    template_key=template_pack.fingerprint,
+                )
+                self.logger.debug(
+                    "Sign card local render completed in %.0f ms",
+                    (time.perf_counter() - render_started) * 1000,
+                )
+                return image_path, "local"
+            except Exception as error:
+                self.logger.warning(
+                    "Local sign card rendering failed; falling back to remote T2I: %s",
+                    error,
+                )
+
         image_path = await self.html_render(
             template,
             render_data,
@@ -717,13 +783,11 @@ class ZhenxunSign(Star):
                 "scale": "css",
             },
         )
-        image_path = await asyncio.to_thread(
-            self._crop_card,
-            image_path,
-            template_pack.width,
-            template_pack.height,
+        self.logger.debug(
+            "Sign card remote render completed in %.0f ms",
+            (time.perf_counter() - render_started) * 1000,
         )
-        return event.image_result(image_path)
+        return image_path, "remote"
 
     async def _prepare_render_data(
         self,

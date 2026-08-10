@@ -44,7 +44,9 @@ AstrBot 的远程 T2I 服务不能读取插件机器上的 `file://` 路径，�
 
 原版卡片宽高为 `465×926`。AstrBot 远程端点默认生成较宽的截图，插件会在收到图片后裁切左上角的原版区域，并输出真正的 PNG。
 
-内嵌五种字体会让单次渲染请求变大，远程渲染通常比普通文字图片慢一些，这是保持原版字体的代价。
+插件现在默认使用“自动”渲染：优先在本机复用 Chrome/Chromium 渲染，只有本地浏览器或依赖不可用时才回退到远程 T2I。这样本地渲染不会上传约 8 MB 的字体和素材，响应速度接近原版真寻。
+
+如果需要强制选择方式，可以在插件设置的“图片渲染方式”中选择“本地浏览器”或“远程 T2I”。本地方式需要 `playwright` 依赖和可用的 Chrome/Chromium；插件会自动安装 Python 依赖，找不到浏览器时仍会回退远程，不会影响签到功能。环境变量 `ASTRBOT_ZHENXUN_SIGN_BROWSER` 可指定浏览器可执行文件路径。
 
 ## 多模板包
 
@@ -151,7 +153,7 @@ uv run --with jinja2 preview.py
 
 ## 手动安装
 
-无法通过仓库地址安装时，可以下载默认 `main` 分支 ZIP，解压到 AstrBot 的 `data/plugins/zhenxun_astr`，随后重载插件或重启 AstrBot。运行环境需要能使用 AstrBot 的 HTML/T2I 渲染端点。
+无法通过仓库地址安装时，可以下载默认 `main` 分支 ZIP，解压到 AstrBot 的 `data/plugins/zhenxun_astr`，随后重载插件或重启 AstrBot。默认自动模式会优先使用本地 Chrome/Chromium；本地浏览器不可用时需要能访问 AstrBot 的 HTML/T2I 渲染端点。
 
 ## 暂缓内容
 
