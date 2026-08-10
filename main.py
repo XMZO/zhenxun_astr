@@ -464,7 +464,7 @@ class ZhenxunSign(Star):
             "brand_name",
             "真寻",
         )
-        date_format = self._config_text("date_format", "iso")
+        date_format = self._template_text(template_settings, "date_format", "iso")
         date_text = self._format_card_datetime(current_time, date_format)
         last_sign_date = str(record.get("last_sign_date") or "")
         last_date_text = self._format_stored_date(last_sign_date, messages)
@@ -604,9 +604,9 @@ class ZhenxunSign(Star):
         defaults: list[str],
         template_settings: dict[str, Any] | None = None,
     ) -> list[str]:
-        configured = self.config.get(key, defaults)
-        if template_settings and key in template_settings:
-            configured = template_settings[key]
+        configured = (
+            template_settings.get(key, defaults) if template_settings else defaults
+        )
         if not isinstance(configured, list):
             return defaults
         values = [str(message) for message in configured if str(message)]
@@ -618,16 +618,10 @@ class ZhenxunSign(Star):
         format_values: dict[str, Any],
         template_settings: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        configured = self.config.get("reserved_panel", {})
-        if not isinstance(configured, dict):
-            configured = {}
-        else:
-            configured = dict(configured)
         template_panel = (
             template_settings.get("reserved_panel", {}) if template_settings else {}
         )
-        if isinstance(template_panel, dict):
-            configured.update(template_panel)
+        configured = dict(template_panel) if isinstance(template_panel, dict) else {}
 
         heart_count = min(
             8,
@@ -966,16 +960,12 @@ body {
         self,
         template_settings: dict[str, Any] | None = None,
     ) -> dict[str, str]:
-        configured_messages = self.config.get("messages", {})
-        if not isinstance(configured_messages, dict):
-            configured_messages = {}
-        else:
-            configured_messages = dict(configured_messages)
         template_messages = (
             template_settings.get("messages", {}) if template_settings else {}
         )
-        if isinstance(template_messages, dict):
-            configured_messages.update(template_messages)
+        configured_messages = (
+            dict(template_messages) if isinstance(template_messages, dict) else {}
+        )
 
         messages = {}
         for key, default in DEFAULT_MESSAGES.items():
@@ -1026,7 +1016,7 @@ body {
         default: str,
     ) -> str:
         if key not in template_settings:
-            return self._config_text(key, default)
+            return default
         configured = template_settings[key]
         return default if configured is None else str(configured)
 

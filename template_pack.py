@@ -15,6 +15,7 @@ PACK_FORMAT = "zhenxun-astr-template"
 PACK_VERSION = 1
 DEFAULT_TEMPLATE_FILE = "sign_card.html"
 DEFAULT_STYLE_FILE = "sign_card.css"
+DEFAULT_SETTINGS_FILE = "template_settings.json"
 DEFAULT_ASSET_ROOT = "assets/sign"
 DEFAULT_CARD_WIDTH = 465
 DEFAULT_CARD_HEIGHT = 926
@@ -212,7 +213,7 @@ class TemplateRegistry:
             template_file=DEFAULT_TEMPLATE_FILE,
             style_file=DEFAULT_STYLE_FILE,
             asset_root=DEFAULT_ASSET_ROOT,
-            settings={},
+            settings=self._legacy_settings(file_names),
             width=DEFAULT_CARD_WIDTH,
             height=DEFAULT_CARD_HEIGHT,
             fingerprint=self._folder_fingerprint(self.plugin_root, file_names),
@@ -221,6 +222,8 @@ class TemplateRegistry:
 
     def _legacy_file_names(self) -> tuple[str, ...]:
         names = [DEFAULT_TEMPLATE_FILE, DEFAULT_STYLE_FILE]
+        if (self.plugin_root / DEFAULT_SETTINGS_FILE).is_file():
+            names.append(DEFAULT_SETTINGS_FILE)
         asset_root = self.plugin_root / DEFAULT_ASSET_ROOT
         if asset_root.is_dir():
             names.extend(
@@ -229,6 +232,16 @@ class TemplateRegistry:
                 if file_path.is_file()
             )
         return tuple(sorted(names))
+
+    def _legacy_settings(self, file_names: tuple[str, ...]) -> dict[str, Any]:
+        if DEFAULT_SETTINGS_FILE not in file_names:
+            return {}
+        settings = json.loads(
+            (self.plugin_root / DEFAULT_SETTINGS_FILE).read_text(encoding="utf-8")
+        )
+        if not isinstance(settings, dict):
+            raise TemplatePackError(f"{DEFAULT_SETTINGS_FILE} 顶层必须是对象")
+        return settings
 
     def load(self, path: Path) -> TemplatePack:
         if path.is_dir():

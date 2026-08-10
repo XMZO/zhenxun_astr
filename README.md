@@ -75,28 +75,20 @@ AstrBot 的远程 T2I 服务不能读取插件机器上的 `file://` 路径，�
 
 内置官方模板不会被自定义包覆盖。无效或损坏的包会被忽略；当前自定义模板渲染失败时，插件会尝试用内置模板完成本次图片回复。
 
-## 自定义文字
+## 模板内容
 
-在 AstrBot WebUI 的插件配置中修改：
+卡片的品牌名称、日期格式、头像、标题、问候语、奖励/信息文字、早晚文案池和底部预留区都由当前模板决定，不占用 AstrBot 插件配置。默认模板保存在根目录的 `template_settings.json`，自定义模板保存在各自 `template.json` 的 `settings` 中，因此切换模板会同时切换文字与素材。
 
-- `brand_name`：替换问候语中的机器人名称，默认值才是“真寻”。
-- `messages`：修改 UID、累计签到、标题、问候、奖励行和“我的信息”三行文字。
-- `morning_messages`、`late_night_messages`：修改原版早安和夜间随机文案。
-- `reserved_panel`：修改底部预留区域的占位文字、心形数量和进度条。
-- `avatar_url`：指定头像 URL 或本地路径；支持 `{user_name}` 占位符。
-
-这些配置是内置 `default` 模板的全局默认值。自定义模板包可以在自己的 `template.json` 中覆盖可见文字，因此模板之间不会互相修改配置。时区、UID 显示和奖励开关仍是插件级运行设置。
-
-卡片里的可见文字来自模板包、全局默认配置或签到数据，不需要修改 Python。推荐使用可视化编辑器生成新包，不再手工覆盖根目录中的官方模板。
+推荐使用可视化编辑器修改这些内容并生成新模板包。AstrBot 设置页只保留模板安装、签到时区、UID 隐私和奖励预留等运行参数。昵称、签到次数、日期、金币等实时数据仍由插件在渲染时传入模板。
 
 ## 本地预览与修改
 
-可视化编辑器保存在同一仓库的 [`editor-v0.2.0` 标签](https://github.com/XMZO/zhenxun_astr/tree/editor-v0.2.0)，不会随 AstrBot 的默认分支安装。它支持实时预览、素材替换、图层选框、拖动、八向拉伸、撤销/重做和恢复原版。
+可视化编辑器保存在同一仓库的 [`editor-v0.3.0` 标签](https://github.com/XMZO/zhenxun_astr/tree/editor-v0.3.0)，不会随 AstrBot 的默认分支安装。它支持实时预览、素材替换、图层选框、拖动、八向拉伸、撤销/重做和恢复原版。
 
 单独获取编辑器：
 
 ```powershell
-git clone --branch editor-v0.2.0 --single-branch https://github.com/XMZO/zhenxun_astr.git
+git clone --branch editor-v0.3.0 --single-branch https://github.com/XMZO/zhenxun_astr.git
 cd zhenxun_astr
 cd template_editor
 uv run editor_server.py
@@ -114,7 +106,7 @@ uv run editor_server.py
 
 ## 基础预览服务器
 
-直接双击 `sign_card.html` 看不到最终效果，因为它是带 Jinja 变量的模板，图片和字体也会在运行时注入。`editor-v0.2.0` 标签提供了一个不依赖 AstrBot 的本地预览服务器；先按上一节获取该版本，再在仓库根目录运行：
+直接双击 `sign_card.html` 看不到最终效果，因为它是带 Jinja 变量的模板，图片和字体也会在运行时注入。`editor-v0.3.0` 标签提供了一个不依赖 AstrBot 的本地预览服务器；先按上一节获取该版本，再在仓库根目录运行：
 
 ```powershell
 uv run --with jinja2 preview.py
@@ -136,7 +128,7 @@ uv run --with jinja2 preview.py
 
 ## 好感度兼容预留
 
-当前插件不计算、不保存、不排行好感度。为了保持原版卡片的高度和底部布局，原好感度区域显示静态的“未接入”占位值，数据只来自 `reserved_panel` 配置。
+当前插件不计算、不保存、不排行好感度。为了保持原版卡片的高度和底部布局，原好感度区域显示静态的“未接入”占位值，数据只来自当前模板的 `reserved_panel`。
 
 未来若接入 `astrbot_plugin_Favour_Ultra`，可以把它作为独立扩展模块向卡片数据提供这些字段；本版本不包含该兼容模块，也不写死对另一个插件的依赖。
 

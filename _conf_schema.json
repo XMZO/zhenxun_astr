@@ -2,13 +2,12 @@
   "template_management": {
     "type": "object",
     "description": "签到模板管理",
-    "hint": "上传编辑器生成的 ZIP 后，请点击本页底部的保存。AstrBot 会热重载插件，插件会校验并安装模板；发送 `签到模板` 可查看结果。上传源文件与安装副本相互独立，从上传列表删除源文件不会卸载已经安装的模板。",
-    "obvious_hint": true,
+    "hint": "上传后请保存配置。",
     "items": {
       "packages": {
         "type": "file",
-        "description": "上传或管理模板 ZIP",
-        "hint": "支持拖拽和一次选择多个 `.zip` 文件。压缩包必须包含 `template.json`、`sign_card.html`、`sign_card.css` 和 `assets/sign`。",
+        "description": "模板 ZIP",
+        "hint": "支持拖拽和多选。",
         "file_types": [
           "zip"
         ],
@@ -16,246 +15,67 @@
       },
       "activate_latest": {
         "type": "bool",
-        "description": "自动应用新上传的模板",
-        "hint": "开启后，每次保存设置时会自动切换到最后一个新增或更新成功的模板。已安装且内容未变化的旧上传不会覆盖你之后手动切换的选择。",
+        "description": "自动应用新模板",
+        "hint": "安装成功后自动切换。",
         "default": true
       }
     }
   },
   "timezone": {
     "type": "string",
-    "description": "用于每日判重和卡片时间显示的时区。",
+    "description": "签到时区",
+    "hint": "用于判重和卡片时间。",
     "default": "Asia/Shanghai"
-  },
-  "brand_name": {
-    "type": "string",
-    "description": "机器人名称，用于替换原卡片问候语中的“真寻”。",
-    "default": "真寻"
-  },
-  "date_format": {
-    "type": "string",
-    "description": "卡片底部时间格式。iso 会生成原版风格的完整时间，也可填写 Python strftime 格式。",
-    "default": "iso"
   },
   "show_user_id": {
     "type": "bool",
-    "description": "是否在原版 UID 位置显示发送者 ID；关闭后显示 XXXX XXXX XXXX。",
+    "description": "显示用户 ID",
+    "hint": "关闭后隐藏真实 ID。",
     "default": true
   },
   "uid_value": {
     "type": "string",
-    "description": "固定覆盖卡片 UID，留空时使用发送者 ID。纯数字会格式化为原版的 4-4-4 分组。",
+    "description": "固定 UID",
+    "hint": "留空使用发送者 ID。",
     "default": ""
-  },
-  "avatar_url": {
-    "type": "string",
-    "description": "自定义头像 URL 或本地路径，支持 {user_name}。留空时 QQ 适配器使用 QQ 头像，其他平台使用内置占位图。",
-    "default": ""
-  },
-  "morning_messages": {
-    "type": "list",
-    "description": "每天 7:00 至 9:59 随机使用的原版早安文案。",
-    "default": [
-      "早上好，希望今天是美好的一天！",
-      "醒了吗，今天也要元气满满哦！",
-      "早上好呀，今天也要开心哦！",
-      "早安，愿你拥有美好的一天！"
-    ]
-  },
-  "late_night_messages": {
-    "type": "list",
-    "description": "每天 0:00 至 5:59 随机使用的原版夜间文案。",
-    "default": [
-      "今天要早点休息哦~",
-      "可不要熬夜到太晚呀",
-      "请尽早休息吧！",
-      "不要熬夜啦！"
-    ]
-  },
-  "messages": {
-    "type": "object",
-    "description": "原版卡片内的可见文案。支持 {brand_name}、{user_name}、{date}、{time}、{last_sign_date}、{sign_count}、{gold}、{gold_balance}、{items}、{status}。",
-    "items": {
-      "uid_prefix": {
-        "type": "string",
-        "description": "UID 前缀。",
-        "default": "UID:"
-      },
-      "sign_count_prefix": {
-        "type": "string",
-        "description": "累计签到数字之前的文字。",
-        "default": "累计签到"
-      },
-      "sign_count_suffix": {
-        "type": "string",
-        "description": "累计签到数字之后的文字。",
-        "default": "天"
-      },
-      "sign_title": {
-        "type": "string",
-        "description": "首次签到时的中部标题。",
-        "default": "今日签到"
-      },
-      "info_title": {
-        "type": "string",
-        "description": "重复签到或查看签到时的中部标题。",
-        "default": "我的信息"
-      },
-      "bot_message_format": {
-        "type": "string",
-        "description": "顶部横幅问候格式，额外支持 {message}。",
-        "default": "{brand_name}说: {message}"
-      },
-      "day_message": {
-        "type": "string",
-        "description": "非早晨和深夜时段的问候正文。",
-        "default": "{brand_name}希望你开心！"
-      },
-      "reward_primary": {
-        "type": "string",
-        "description": "签到卡片奖励区第一行。",
-        "default": "签到成功"
-      },
-      "reward_gold": {
-        "type": "string",
-        "description": "签到卡片奖励区第二行。",
-        "default": "金币 +{gold}"
-      },
-      "reward_item": {
-        "type": "string",
-        "description": "签到卡片奖励区第三行。",
-        "default": "{items}"
-      },
-      "info_primary": {
-        "type": "string",
-        "description": "我的信息区第一行，不显示好感度排行。",
-        "default": "累计签到：{sign_count} 天"
-      },
-      "info_gold": {
-        "type": "string",
-        "description": "我的信息区第二行。",
-        "default": "总金币：{gold_balance}"
-      },
-      "info_item": {
-        "type": "string",
-        "description": "我的信息区第三行。",
-        "default": "上次签到：{last_sign_date}"
-      },
-      "none_item": {
-        "type": "string",
-        "description": "本次没有道具时替换 {items} 的文字。",
-        "default": "暂无道具"
-      },
-      "never_date": {
-        "type": "string",
-        "description": "没有历史签到日期时的文字。",
-        "default": "还没有记录"
-      },
-      "success_status": {
-        "type": "string",
-        "description": "新签到状态，可用于文案中的 {status}。",
-        "default": "签到成功"
-      },
-      "already_status": {
-        "type": "string",
-        "description": "今日已签到状态，可用于文案中的 {status}。",
-        "default": "今日已签到"
-      },
-      "not_signed_status": {
-        "type": "string",
-        "description": "尚无签到记录状态，可用于文案中的 {status}。",
-        "default": "尚未签到"
-      },
-      "temperature_suffix": {
-        "type": "string",
-        "description": "天气温度后缀。",
-        "default": "℃"
-      }
-    }
-  },
-  "reserved_panel": {
-    "type": "object",
-    "description": "原版底部好感度区域的静态占位内容。当前不读取、不计算好感度，未来供独立兼容模块接管。",
-    "items": {
-      "current_label": {
-        "type": "string",
-        "description": "底部第一行标签。",
-        "default": "当前好感度"
-      },
-      "current": {
-        "type": "string",
-        "description": "底部第一行值。",
-        "default": "--"
-      },
-      "level_label": {
-        "type": "string",
-        "description": "等级行标签。",
-        "default": "好感度等级"
-      },
-      "level_text": {
-        "type": "string",
-        "description": "等级行值。",
-        "default": "未接入"
-      },
-      "attitude": {
-        "type": "string",
-        "description": "态度位置的占位文案。",
-        "default": "对你的态度: 未接入"
-      },
-      "next_text": {
-        "type": "string",
-        "description": "升级距离位置的占位文案。",
-        "default": "距离升级还差--好感度"
-      },
-      "separator": {
-        "type": "string",
-        "description": "底部标签和值之间的分隔符。",
-        "default": ": "
-      },
-      "heart_count": {
-        "type": "int",
-        "description": "心形图标总数，最大 8。",
-        "default": 8
-      },
-      "filled_hearts": {
-        "type": "int",
-        "description": "填充心形数量，仅为静态显示。",
-        "default": 0
-      },
-      "progress": {
-        "type": "float",
-        "description": "底部进度条百分比，仅为静态显示。",
-        "default": 0
-      }
-    }
   },
   "rewards": {
     "type": "object",
-    "description": "金币和道具的预留记录，默认关闭，不连接商店，也不执行道具效果。",
+    "description": "奖励预留",
+    "hint": "默认关闭，暂不执行效果。",
     "items": {
       "enable_gold": {
         "type": "bool",
-        "description": "是否启用插件内部金币记录。",
+        "description": "记录金币",
         "default": false
       },
       "gold_min": {
         "type": "int",
-        "description": "单次签到金币下限。",
+        "description": "金币下限",
+        "condition": {
+          "enable_gold": true
+        },
         "default": 1
       },
       "gold_max": {
         "type": "int",
-        "description": "单次签到金币上限。",
+        "description": "金币上限",
+        "condition": {
+          "enable_gold": true
+        },
         "default": 100
       },
       "enable_item_placeholder": {
         "type": "bool",
-        "description": "是否从预留道具池记录一个道具；当前不执行道具效果。",
+        "description": "记录预留道具",
         "default": false
       },
       "item_pool": {
         "type": "list",
-        "description": "预留道具名称列表。",
+        "description": "预留道具池",
+        "condition": {
+          "enable_item_placeholder": true
+        },
         "default": []
       }
     }

@@ -1,0 +1,57 @@
+{
+  "brand_name": "真寻",
+  "date_format": "iso",
+  "avatar_url": "",
+  "messages": {
+    "uid_prefix": "UID:",
+    "sign_count_prefix": "累计签到",
+    "sign_count_suffix": "天",
+    "sign_title": "今日签到",
+    "info_title": "我的信息",
+    "bot_message_format": "{brand_name}说: {message}",
+    "day_message": "{brand_name}希望你开心！",
+    "reward_primary": "签到成功",
+    "reward_gold": "金币 +{gold}",
+    "reward_item": "{items}",
+    "info_primary": "累计签到：{sign_count} 天",
+    "info_gold": "总金币：{gold_balance}",
+    "info_item": "上次签到：{last_sign_date}",
+    "none_item": "暂无道具",
+    "never_date": "还没有记录",
+    "success_status": "签到成功",
+    "already_status": "今日已签到",
+    "not_signed_status": "尚未签到",
+    "reserved_current_label": "当前好感度",
+    "reserved_current": "--",
+    "reserved_level_label": "好感度等级",
+    "reserved_level_text": "未接入",
+    "reserved_attitude": "对你的态度: 未接入",
+    "reserved_next_text": "距离升级还差--好感度",
+    "reserved_separator": ": ",
+    "temperature_suffix": "℃"
+  },
+  "morning_messages": [
+    "早上好，希望今天是美好的一天！",
+    "醒了吗，今天也要元气满满哦！",
+    "早上好呀，今天也要开心哦！",
+    "早安，愿你拥有美好的一天！"
+  ],
+  "late_night_messages": [
+    "今天要早点休息哦~",
+    "可不要熬夜到太晚呀",
+    "请尽早休息吧！",
+    "不要熬夜啦！"
+  ],
+  "reserved_panel": {
+    "current_label": "当前好感度",
+    "current": "--",
+    "level_label": "好感度等级",
+    "level_text": "未接入",
+    "attitude": "对你的态度: 未接入",
+    "next_text": "距离升级还差--好感度",
+    "separator": ": ",
+    "heart_count": 8,
+    "filled_hearts": 0,
+    "progress": 0
+  }
+}

@@ -18,6 +18,7 @@
   },
   "settings": {
     "brand_name": "夏娜",
+    "date_format": "iso",
     "avatar_url": "",
     "messages": {
       "uid_prefix": "UID:",
