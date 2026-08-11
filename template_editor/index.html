@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <link rel="icon" href="data:,">
+    <title>签到模板编辑器</title>
+    <link rel="stylesheet" href="/editor.css">
+</head>
+<body>
+<header class="topbar">
+    <div class="brand-lockup">
+        <div class="brand-mark">ZX</div>
+        <div>
+            <h1>签到模板编辑器</h1>
+            <p>独立工作区 · 原版基线只读</p>
+        </div>
+    </div>
+    <div class="top-actions">
+        <button id="undoButton" class="icon-button" title="撤销" aria-label="撤销">↶</button>
+        <button id="redoButton" class="icon-button" title="重做" aria-label="重做">↷</button>
+        <span class="action-divider"></span>
+        <button id="resetButton" class="button danger">恢复原版</button>
+        <button id="exportProjectButton" class="button">导出项目</button>
+        <label class="button file-button">
+            导入项目
+            <input id="importProjectInput" type="file" accept="application/json,.json">
+        </label>
+        <button id="generateButton" class="button primary">生成模板</button>
+    </div>
+</header>
+
+<main class="workbench">
+    <aside class="left-panel panel-shell">
+        <nav class="panel-tabs" aria-label="编辑面板">
+            <button class="panel-tab active" data-panel="contentPanel">内容</button>
+            <button class="panel-tab" data-panel="assetsPanel">素材</button>
+            <button class="panel-tab" data-panel="layersPanel">图层</button>
+        </nav>
+
+        <section id="contentPanel" class="panel-content active">
+            <div class="panel-intro">
+                <div>
+                    <h2>卡片内容</h2>
+                    <p>示例数据实时映射到画布；生成后自动安装为独立模板。</p>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="section-title">模板包信息</div>
+                <div class="field-grid">
+                    <label class="field"><span>模板名称</span><input data-bind="templateMeta.name" type="text" maxlength="80"></label>
+                    <label class="field"><span>模板说明</span><textarea data-bind="templateMeta.description" rows="2"></textarea></label>
+                </div>
+                <p class="microcopy">名称会显示在机器人模板列表中；内部标识由生成器随机创建，不会对外展示。</p>
+            </div>
+
+            <div class="control-section">
+                <div class="section-title">预览数据</div>
+                <div class="field-grid two-columns">
+                    <label class="field"><span>昵称</span><input data-bind="preview.nickname" type="text"></label>
+                    <label class="field"><span>UID</span><input data-bind="preview.uid" type="text"></label>
+                    <label class="field"><span>累计签到</span><input data-bind="preview.signCount" type="number" min="0" max="999999"></label>
+                    <label class="field"><span>温度</span><input data-bind="preview.temperature" type="number" min="-50" max="60"></label>
+                    <label class="field wide"><span>顶部寄语</span><textarea data-bind="preview.botMessage" rows="2"></textarea></label>
+                    <label class="field wide"><span>卡片日期</span><input data-bind="preview.date" type="text"></label>
+                </div>
+                <div class="field-grid two-columns compact-grid">
+                    <label class="field"><span>模式</span><select data-bind="preview.mode"><option value="sign">今日签到</option><option value="view">我的信息</option></select></label>
+                    <label class="field"><span>温度后缀</span><input data-bind="content.temperatureSuffix" type="text"></label>
+                    <label class="field"><span>天气图标</span><select id="previewWeather" data-bind="preview.weather"></select></label>
+                    <label class="field"><span>标签图标</span><select id="previewTag" data-bind="preview.tag"></select></label>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="section-title">运行文字</div>
+                <div class="field-grid">
+                    <label class="field"><span>品牌名称</span><input data-bind="content.brandName" type="text"></label>
+                    <label class="field"><span>卡片日期格式</span><input data-bind="content.dateFormat" type="text" placeholder="iso 或 %Y-%m-%d"></label>
+                    <label class="field"><span>头像 URL 或本地路径</span><input data-bind="content.avatarUrl" type="text" placeholder="留空使用平台头像"></label>
+                    <label class="field"><span>UID 前缀</span><input data-bind="content.uidPrefix" type="text"></label>
+                    <div class="field-row">
+                        <label class="field"><span>签到前缀</span><input data-bind="content.signCountPrefix" type="text"></label>
+                        <label class="field"><span>签到后缀</span><input data-bind="content.signCountSuffix" type="text"></label>
+                    </div>
+                    <div class="field-row">
+                        <label class="field"><span>签到标题</span><input data-bind="content.signTitle" type="text"></label>
+                        <label class="field"><span>信息标题</span><input data-bind="content.infoTitle" type="text"></label>
+                    </div>
+                    <label class="field"><span>日间寄语模板</span><input data-bind="content.dayMessage" type="text"></label>
+                    <label class="field"><span>寄语外层模板</span><input data-bind="content.botMessageFormat" type="text"></label>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="section-title">奖励与信息三行</div>
+                <div class="field-grid">
+                    <label class="field"><span>签到第一行</span><input data-bind="content.rewardPrimary" type="text"></label>
+                    <label class="field"><span>签到金币行</span><input data-bind="content.rewardGold" type="text"></label>
+                    <label class="field"><span>签到道具行</span><input data-bind="content.rewardItem" type="text"></label>
+                    <label class="field"><span>信息第一行</span><input data-bind="content.infoPrimary" type="text"></label>
+                    <label class="field"><span>信息金币行</span><input data-bind="content.infoGold" type="text"></label>
+                    <label class="field"><span>信息日期行</span><input data-bind="content.infoItem" type="text"></label>
+                </div>
+                <p class="microcopy">支持 `{brand_name}`、`{sign_count}`、`{gold}`、`{gold_balance}`、`{items}`、`{last_sign_date}` 等占位符。</p>
+            </div>
+
+            <div class="control-section">
+                <div class="section-title">底部预留区域</div>
+                <div class="field-grid">
+                    <div class="field-row">
+                        <label class="field"><span>当前标签</span><input data-bind="content.reservedCurrentLabel" type="text"></label>
+                        <label class="field"><span>当前值</span><input data-bind="content.reservedCurrent" type="text"></label>
+                    </div>
+                    <div class="field-row">
+                        <label class="field"><span>等级标签</span><input data-bind="content.reservedLevelLabel" type="text"></label>
+                        <label class="field"><span>等级值</span><input data-bind="content.reservedLevelText" type="text"></label>
+                    </div>
+                    <label class="field"><span>态度文字</span><input data-bind="content.reservedAttitude" type="text"></label>
+                    <label class="field"><span>升级提示</span><input data-bind="content.reservedNextText" type="text"></label>
+                    <label class="field"><span>最高等级提示</span><input data-bind="content.reservedMaxText" type="text"></label>
+                    <div class="field-row three-columns">
+                        <label class="field"><span>分隔符</span><input data-bind="content.reservedSeparator" type="text"></label>
+                        <label class="field"><span>进度 %</span><input data-bind="content.reservedProgress" type="number" min="0" max="100"></label>
+                        <label class="field"><span>爱心数</span><input data-bind="content.heartCount" type="number" min="0" max="16"></label>
+                    </div>
+                    <label class="field"><span>填充爱心数</span><input data-bind="content.filledHearts" type="number" min="0" max="16"></label>
+                </div>
+                <p class="microcopy">支持 `{favour}`、`{favour_level}`、`{favour_relationship}`、`{favour_attitude}`、`{favour_next}`、`{favour_next_level}` 和 `{favour_delta}`。启用联动后进度条与爱心会使用实时数据。</p>
+            </div>
+
+            <div class="control-section">
+                <div class="section-title">时段寄语池</div>
+                <div class="field-grid">
+                    <label class="field"><span>早安文案（一行一条）</span><textarea data-bind-list="content.morningMessages" rows="3"></textarea></label>
+                    <label class="field"><span>夜间文案（一行一条）</span><textarea data-bind-list="content.lateNightMessages" rows="3"></textarea></label>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="section-title">主题颜色</div>
+                <div class="color-grid">
+                    <label class="color-field"><input data-bind="theme.pageBg" type="color"><span>页面背景</span></label>
+                    <label class="color-field"><input data-bind="theme.avatarShadow" type="color"><span>头像阴影</span></label>
+                    <label class="color-field"><input data-bind="theme.nicknameText" type="color"><span>昵称文字</span></label>
+                    <label class="color-field"><input data-bind="theme.primary" type="color"><span>主色</span></label>
+                    <label class="color-field"><input data-bind="theme.primaryDark" type="color"><span>深色块</span></label>
+                    <label class="color-field"><input data-bind="theme.divider" type="color"><span>分隔线</span></label>
+                    <label class="color-field"><input data-bind="theme.progressBorder" type="color"><span>进度边框</span></label>
+                </div>
+                <label class="field advanced-css-field"><span>高级 CSS 覆盖</span><textarea data-bind="advancedCss" rows="7" placeholder="例如：.today-text { text-shadow: 2px 2px 0 #fff; }"></textarea></label>
+                <p class="microcopy">内容会追加到模板样式末尾，适合做复杂布局、边框、阴影和伪元素效果。生成前请自行检查选择器。</p>
+            </div>
+        </section>
+
+        <section id="assetsPanel" class="panel-content">
+            <div class="panel-intro">
+                <div>
+                    <h2>素材库</h2>
+                    <p>上传后只保存到编辑器工作区，原始 `assets/sign` 不会被覆盖。</p>
+                </div>
+            </div>
+            <div id="assetGroups"></div>
+        </section>
+
+        <section id="layersPanel" class="panel-content">
+            <div class="panel-intro">
+                <div>
+                    <h2>图层</h2>
+                    <p>点击图层选中，也可以直接在画布上拖动。</p>
+                </div>
+            </div>
+            <div class="layer-actions">
+                <button id="addTextLayer" class="button small">＋ 文字</button>
+                <button id="addImageLayer" class="button small">＋ 图片</button>
+            </div>
+            <div id="layerList" class="layer-list"></div>
+        </section>
+    </aside>
+
+    <section class="stage-panel">
+        <div class="stage-toolbar">
+            <div class="mode-switch" role="group" aria-label="预览模式">
+                <button id="modeSignButton" class="mode-button active">签到卡</button>
+                <button id="modeViewButton" class="mode-button">信息卡</button>
+            </div>
+            <div class="stage-actions">
+                <button id="zoomOutButton" class="icon-button" title="缩小" aria-label="缩小">−</button>
+                <input id="zoomRange" type="range" min="0.45" max="1" step="0.05" value="0.7" aria-label="缩放">
+                <button id="zoomInButton" class="icon-button" title="放大" aria-label="放大">＋</button>
+                <span id="zoomValue" class="zoom-value">70%</span>
+            </div>
+        </div>
+        <div class="stage-canvas">
+            <div id="canvasViewport" class="canvas-viewport">
+                <iframe id="previewFrame" title="签到模板实时预览" scrolling="no"></iframe>
+                <div id="selectionOverlay" class="selection-overlay" aria-hidden="true" hidden>
+                    <span id="selectionLabel" class="selection-label"></span>
+                    <span class="selection-handle top-left" data-resize-handle="nw"></span>
+                    <span class="selection-handle top-center" data-resize-handle="n"></span>
+                    <span class="selection-handle top-right" data-resize-handle="ne"></span>
+                    <span class="selection-handle middle-right" data-resize-handle="e"></span>
+                    <span class="selection-handle bottom-right" data-resize-handle="se"></span>
+                    <span class="selection-handle bottom-center" data-resize-handle="s"></span>
+                    <span class="selection-handle bottom-left" data-resize-handle="sw"></span>
+                    <span class="selection-handle middle-left" data-resize-handle="w"></span>
+                    <span class="selection-center"></span>
+                </div>
+            </div>
+        </div>
+        <div class="stage-footer">
+            <span id="renderStatus" class="status-dot pending">正在准备预览</span>
+            <span>画布尺寸固定为 465 × 926，保持 AstrBot 输出兼容。</span>
+        </div>
+    </section>
+
+    <aside class="right-panel panel-shell">
+        <div class="inspector-header">
+            <div>
+                <span class="eyebrow">INSPECTOR</span>
+                <h2 id="inspectorTitle">未选择图层</h2>
+            </div>
+            <button id="resetLayerButton" class="icon-button" title="重置当前图层" aria-label="重置当前图层">↺</button>
+        </div>
+        <div id="inspectorFields" class="inspector-fields">
+            <div class="empty-inspector">从左侧图层列表或画布选择一个元素。</div>
+        </div>
+    </aside>
+</main>
+
+<div id="toast" class="toast" role="status"></div>
+
+<dialog id="generateDialog" class="generate-dialog">
+    <div class="dialog-head">
+        <div>
+            <span class="eyebrow">GENERATED</span>
+            <h2>模板包已生成</h2>
+        </div>
+        <button id="closeDialogButton" class="icon-button" title="关闭" aria-label="关闭">×</button>
+    </div>
+    <div id="generateResult" class="generate-result"></div>
+</dialog>
+
+<script src="/editor.js" defer></script>
+</body>
+</html>
