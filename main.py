@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import random
+import shutil
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -16,6 +20,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from PIL import Image
 
+from .integrations import FavourIntegrationManager, FavourSnapshot
 from .local_renderer import LocalHtmlRenderer
 from .storage import SignStore
 from .template_pack import TemplatePack, TemplatePackError, TemplateRegistry
@@ -54,11 +59,12 @@ DEFAULT_MESSAGES = {
     "already_status": "今日已签到",
     "not_signed_status": "尚未签到",
     "reserved_current_label": "当前好感度",
-    "reserved_current": "--",
+    "reserved_current": "{favour}",
     "reserved_level_label": "好感度等级",
-    "reserved_level_text": "未接入",
-    "reserved_attitude": "对你的态度: 未接入",
-    "reserved_next_text": "距离升级还差--好感度",
+    "reserved_level_text": "{favour_level}",
+    "reserved_attitude": "对你的态度: {favour_attitude}",
+    "reserved_next_text": "距离升级还差{favour_next}好感度",
+    "reserved_max_text": "已达到最高好感等级",
     "reserved_separator": ": ",
     "temperature_suffix": "℃",
 }
@@ -70,6 +76,16 @@ FONT_FILES = {
     "rxxxtFont": "rxxxkat.woff2",
     "kcytFont": "jcyt.woff2",
 }
+
+FONT_FALLBACK_STYLE = """
+.sign-data {
+    font-family: 'kcytFont', 'shFont', sans-serif;
+}
+
+.bottom-foot {
+    font-family: 'rxxxtFont', 'shFont', sans-serif;
+}
+""".strip()
 
 STATIC_IMAGE_FILES = {
     "calendar": "img/rl.png",
@@ -84,6 +100,13 @@ QQ_AVATAR_URL = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=160"
 CARD_WIDTH = 465
 CARD_HEIGHT = 926
 MAX_AVATAR_BYTES = 2 * 1024 * 1024
+AVATAR_TIMEOUT_SECONDS = 2
+AVATAR_CACHE_TTL_SECONDS = 60 * 60
+AVATAR_CACHE_RETENTION_SECONDS = 30 * 24 * 60 * 60
+AVATAR_FAILURE_RETRY_SECONDS = 5 * 60
+AVATAR_MEMORY_CACHE_SECONDS = 5 * 60
+CARD_CACHE_VERSION = "2"
+LOCAL_ASSET_CACHE_VERSION = "1"
 TEMPLATE_UPLOAD_PREFIX = "files/template_management/packages/"
 SIGN_COMMAND_NAMES = ("签到", "打卡")
 INFO_COMMAND_NAMES = ("我的签到", "签到状态")
@@ -171,10 +194,22 @@ class ZhenxunSign(Star):
             self.plugin_root,
             self.data_dir / "template_packs",
         )
-        self._asset_bundles: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._asset_bundles: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
         self._asset_lock = asyncio.Lock()
-        self._avatar_cache: dict[str, str] = {}
+        self._avatar_cache: dict[str, tuple[float, str]] = {}
+        self._avatar_failures: dict[str, float] = {}
+        self._avatar_locks: dict[str, asyncio.Lock] = {}
+        self._avatar_session: aiohttp.ClientSession | None = None
+        self._avatar_session_lock = asyncio.Lock()
+        self._card_cache_guard = asyncio.Lock()
+        self._card_cache_locks: dict[str, asyncio.Lock] = {}
+        self._card_cache_day = ""
         self.local_renderer = LocalHtmlRenderer(self.logger)
+        self.favour_integration = FavourIntegrationManager(
+            context,
+            self.config,
+            self.logger,
+        )
         self._template_error_snapshot: tuple[str, ...] = ()
         self._template_import_report: dict[str, Any] = {
             "checked": 0,
@@ -189,10 +224,32 @@ class ZhenxunSign(Star):
         await asyncio.to_thread(self._migrate_legacy_template_selection)
         await asyncio.to_thread(self._import_configured_template_packages)
         packs, _ = await asyncio.to_thread(self._discover_templates)
-        await asyncio.to_thread(self._normalise_selected_template, packs)
+        selected_pack = await asyncio.to_thread(
+            self._normalise_selected_template,
+            packs,
+        )
+        await asyncio.to_thread(
+            self._prune_local_asset_cache,
+            tuple(packs.values()),
+        )
+        await asyncio.to_thread(self._prune_avatar_cache)
         self._sync_template_schema(packs)
+        if self._image_cache_enabled():
+            await self._prepare_card_cache(
+                datetime.now(self.timezone).date().isoformat()
+            )
         if self.render_backend != "remote":
             if await self.local_renderer.start():
+                try:
+                    await self._get_asset_bundle(
+                        selected_pack,
+                        asset_mode="local",
+                    )
+                except Exception as error:
+                    self.logger.warning(
+                        "Local sign assets could not be preloaded: %s",
+                        error,
+                    )
                 self.logger.info("Sign cards will use the local browser renderer")
             else:
                 self.logger.warning(
@@ -202,6 +259,9 @@ class ZhenxunSign(Star):
                 )
 
     async def terminate(self) -> None:
+        if self._avatar_session is not None:
+            await self._avatar_session.close()
+            self._avatar_session = None
         await self.local_renderer.close()
 
     @filter.custom_filter(_SignCommandFilter)
@@ -220,6 +280,11 @@ class ZhenxunSign(Star):
             signed_at=current_time.isoformat(timespec="seconds"),
             reward=reward,
         )
+        favour_snapshot = await self.favour_integration.handle_sign(
+            event,
+            user_id,
+            is_new_sign,
+        )
         card_data = self._build_card_data(
             event=event,
             record=record,
@@ -229,13 +294,21 @@ class ZhenxunSign(Star):
             is_new_sign=is_new_sign,
             reward=reward if is_new_sign else None,
             template_pack=template_pack,
+            favour_snapshot=favour_snapshot,
         )
         self.logger.info(
-            "Sign command handled: user=%s, new_sign=%s",
+            "Sign command handled: user=%s, new_sign=%s, favour_delta=%s",
             user_id,
             is_new_sign,
+            favour_snapshot.reward_delta,
         )
-        yield await self._render_or_text(event, card_data, template_pack)
+        yield await self._render_or_text(
+            event,
+            card_data,
+            template_pack,
+            cache_identity=storage_key,
+            cache_date=current_time.date().isoformat(),
+        )
 
     @filter.custom_filter(_InfoCommandFilter)
     async def my_sign(self, event: AstrMessageEvent):
@@ -249,6 +322,7 @@ class ZhenxunSign(Star):
             platform=platform,
             display_name=display_name,
         )
+        favour_snapshot = await self.favour_integration.get_snapshot(event, user_id)
         card_data = self._build_card_data(
             event=event,
             record=record,
@@ -258,9 +332,16 @@ class ZhenxunSign(Star):
             is_new_sign=False,
             reward=None,
             template_pack=template_pack,
+            favour_snapshot=favour_snapshot,
         )
         self.logger.info("My sign command handled: user=%s", user_id)
-        yield await self._render_or_text(event, card_data, template_pack)
+        yield await self._render_or_text(
+            event,
+            card_data,
+            template_pack,
+            cache_identity=storage_key,
+            cache_date=current_time.date().isoformat(),
+        )
 
     def _import_configured_template_packages(self) -> None:
         report: dict[str, Any] = {
@@ -491,6 +572,7 @@ class ZhenxunSign(Star):
         is_new_sign: bool,
         reward: dict[str, Any] | None,
         template_pack: TemplatePack | None = None,
+        favour_snapshot: FavourSnapshot | None = None,
     ) -> dict[str, Any]:
         template_settings = template_pack.settings if template_pack else {}
         messages = self._messages(template_settings)
@@ -523,6 +605,8 @@ class ZhenxunSign(Star):
         else:
             status_text = messages["not_signed_status"]
 
+        favour_snapshot = favour_snapshot or self.favour_integration.empty_snapshot()
+        favour_values = self.favour_integration.template_values(favour_snapshot)
         format_values = {
             "brand_name": brand_name,
             "user_name": display_name,
@@ -534,6 +618,7 @@ class ZhenxunSign(Star):
             "gold_balance": gold_balance,
             "items": item_text,
             "status": status_text,
+            **favour_values,
         }
         bot_message = self._build_bot_message(
             current_time,
@@ -596,6 +681,7 @@ class ZhenxunSign(Star):
                 messages,
                 format_values,
                 template_settings,
+                favour_snapshot,
             ),
             "page": page,
             "bot_message": bot_message,
@@ -606,6 +692,8 @@ class ZhenxunSign(Star):
             "gold_balance": gold_balance,
             "inventory": record.get("items", {}),
             "status_text": status_text,
+            "favour": favour_values,
+            "favour_cache_token": self.favour_integration.cache_token(favour_snapshot),
         }
 
     def _build_bot_message(
@@ -655,6 +743,7 @@ class ZhenxunSign(Star):
         messages: dict[str, str],
         format_values: dict[str, Any],
         template_settings: dict[str, Any] | None = None,
+        favour_snapshot: FavourSnapshot | None = None,
     ) -> dict[str, Any]:
         template_panel = (
             template_settings.get("reserved_panel", {}) if template_settings else {}
@@ -665,15 +754,42 @@ class ZhenxunSign(Star):
             8,
             self._as_non_negative_int(configured.get("heart_count", 8)),
         )
-        filled_hearts = min(
-            heart_count,
-            self._as_non_negative_int(configured.get("filled_hearts", 0)),
-        )
+        snapshot = favour_snapshot or self.favour_integration.empty_snapshot()
+        if snapshot.available:
+            filled_hearts = self.favour_integration.filled_hearts(
+                snapshot,
+                heart_count,
+            )
+            progress = snapshot.level_progress
+        else:
+            filled_hearts = min(
+                heart_count,
+                self._as_non_negative_int(configured.get("filled_hearts", 0)),
+            )
+            progress = self._as_percentage(configured.get("progress", 0))
+
+        legacy_dynamic_values = {
+            "--": "{favour}",
+            "未接入": "{favour_level}",
+            "对你的态度: 未接入": "对你的态度: {favour_attitude}",
+            "距离升级还差--好感度": "距离升级还差{favour_next}好感度",
+        }
 
         def panel_text(key: str, default_key: str) -> str:
             raw_value = configured.get(key, messages[default_key])
             value = messages[default_key] if raw_value is None else str(raw_value)
+            if snapshot.available:
+                value = legacy_dynamic_values.get(value, value)
             return self._format_text(value, format_values)
+
+        next_text_key = (
+            "max_text" if snapshot.available and snapshot.is_max_level else "next_text"
+        )
+        next_message_key = (
+            "reserved_max_text"
+            if snapshot.available and snapshot.is_max_level
+            else "reserved_next_text"
+        )
 
         return {
             "current_label": panel_text(
@@ -684,11 +800,11 @@ class ZhenxunSign(Star):
             "level_label": panel_text("level_label", "reserved_level_label"),
             "level_text": panel_text("level_text", "reserved_level_text"),
             "attitude": panel_text("attitude", "reserved_attitude"),
-            "next_text": panel_text("next_text", "reserved_next_text"),
+            "next_text": panel_text(next_text_key, next_message_key),
             "separator": str(
                 configured.get("separator", messages["reserved_separator"])
             ),
-            "progress": self._as_percentage(configured.get("progress", 0)),
+            "progress": self._as_percentage(progress),
             "heart2": [True] * filled_hearts,
             "heart1": [True] * (heart_count - filled_hearts),
         }
@@ -698,11 +814,20 @@ class ZhenxunSign(Star):
         event: AstrMessageEvent,
         card_data: dict[str, Any],
         template_pack: TemplatePack | None = None,
+        *,
+        cache_identity: str = "",
+        cache_date: str = "",
     ):
         fallback = self._fallback_text(card_data)
         selected_pack = template_pack or self._active_template()
         try:
-            return await self._render_card(event, card_data, selected_pack)
+            return await self._render_card(
+                event,
+                card_data,
+                selected_pack,
+                cache_identity=cache_identity,
+                cache_date=cache_date,
+            )
         except Exception as error:
             self.logger.warning(
                 "Sign card rendering failed with template %s: %s",
@@ -712,7 +837,13 @@ class ZhenxunSign(Star):
             if selected_pack.id != "default":
                 try:
                     default_pack = self.template_registry.legacy_pack()
-                    return await self._render_card(event, card_data, default_pack)
+                    return await self._render_card(
+                        event,
+                        card_data,
+                        default_pack,
+                        cache_identity=cache_identity,
+                        cache_date=cache_date,
+                    )
                 except Exception as fallback_error:
                     self.logger.warning(
                         "Default sign card fallback rendering failed: %s",
@@ -725,58 +856,263 @@ class ZhenxunSign(Star):
         event: AstrMessageEvent,
         card_data: dict[str, Any],
         template_pack: TemplatePack,
+        *,
+        cache_identity: str = "",
+        cache_date: str = "",
+    ):
+        cache_path = self._card_cache_path(
+            cache_identity,
+            cache_date,
+            template_pack,
+            card_data,
+        )
+        if cache_path is None:
+            return await self._render_card_uncached(
+                event,
+                card_data,
+                template_pack,
+            )
+
+        await self._prepare_card_cache(cache_date)
+        cache_lock = await self._card_cache_lock(cache_path)
+        async with cache_lock:
+            cache_started = time.perf_counter()
+            if await asyncio.to_thread(
+                self._is_valid_cached_card,
+                cache_path,
+                template_pack.width,
+                template_pack.height,
+            ):
+                self.logger.info(
+                    "Sign card ready: backend=cache, template=%s, cache=hit, "
+                    "total=%.0f ms",
+                    template_pack.id,
+                    (time.perf_counter() - cache_started) * 1000,
+                )
+                return event.image_result(str(cache_path))
+
+            return await self._render_card_uncached(
+                event,
+                card_data,
+                template_pack,
+                cache_path=cache_path,
+            )
+
+    async def _render_card_uncached(
+        self,
+        event: AstrMessageEvent,
+        card_data: dict[str, Any],
+        template_pack: TemplatePack,
+        *,
+        cache_path: Path | None = None,
     ):
         render_started = time.perf_counter()
+        stage_started = render_started
         template = await asyncio.to_thread(
             template_pack.read_text,
             template_pack.template_file,
         )
-        render_data = await self._prepare_render_data(card_data, template_pack)
-        image_path, backend = await self._render_template_image(
+        read_ms = (time.perf_counter() - stage_started) * 1000
+
+        image_path, backend, prepare_ms, browser_ms = await self._render_template_image(
             template,
-            render_data,
+            card_data,
             template_pack,
         )
+
+        stage_started = time.perf_counter()
         image_path = await asyncio.to_thread(
             self._crop_card,
             image_path,
             template_pack.width,
             template_pack.height,
         )
-        self.logger.debug("Sign card rendered with %s backend", backend)
-        self.logger.debug(
-            "Sign card total render time: %.0f ms",
+        crop_ms = (time.perf_counter() - stage_started) * 1000
+
+        cache_state = "off"
+        cache_ms = 0.0
+        if cache_path is not None:
+            cache_started = time.perf_counter()
+            try:
+                image_path = await asyncio.to_thread(
+                    self._store_cached_card,
+                    image_path,
+                    cache_path,
+                )
+                cache_state = "miss"
+            except OSError as error:
+                cache_state = "write-failed"
+                self.logger.warning("Sign card cache write failed: %s", error)
+            cache_ms = (time.perf_counter() - cache_started) * 1000
+
+        self.logger.info(
+            "Sign card ready: backend=%s, template=%s, cache=%s, "
+            "read=%.0f ms, prepare=%.0f ms, render=%.0f ms, crop=%.0f ms, "
+            "store=%.0f ms, total=%.0f ms",
+            backend,
+            template_pack.id,
+            cache_state,
+            read_ms,
+            prepare_ms,
+            browser_ms,
+            crop_ms,
+            cache_ms,
             (time.perf_counter() - render_started) * 1000,
         )
         return event.image_result(image_path)
 
+    def _image_cache_enabled(self) -> bool:
+        configured = self.config.get("image_cache", {})
+        if not isinstance(configured, dict):
+            return True
+        return bool(configured.get("enabled", True))
+
+    def _card_cache_path(
+        self,
+        cache_identity: str,
+        cache_date: str,
+        template_pack: TemplatePack,
+        card_data: dict[str, Any] | None = None,
+    ) -> Path | None:
+        if not self._image_cache_enabled() or not cache_identity or not cache_date:
+            return None
+        variant = "\0".join(
+            (
+                CARD_CACHE_VERSION,
+                cache_identity,
+                template_pack.id,
+                template_pack.fingerprint,
+                str(bool(self.config.get("show_user_id", True))),
+                str(self.config.get("uid_value", "") or ""),
+                repr(
+                    (
+                        (card_data or {}).get("last_sign_date"),
+                        (card_data or {}).get("sign_count"),
+                        (card_data or {}).get("gold_balance"),
+                        (card_data or {}).get("inventory"),
+                        (card_data or {}).get("favour_cache_token"),
+                    )
+                ),
+            )
+        )
+        digest = hashlib.sha256(variant.encode("utf-8")).hexdigest()
+        return self.data_dir / "card_cache" / cache_date / f"{digest}.png"
+
+    async def _prepare_card_cache(self, cache_date: str) -> None:
+        async with self._card_cache_guard:
+            if self._card_cache_day == cache_date:
+                return
+            await asyncio.to_thread(self._prune_card_cache, cache_date)
+            self._card_cache_locks.clear()
+            self._card_cache_day = cache_date
+
+    async def _card_cache_lock(self, cache_path: Path) -> asyncio.Lock:
+        key = str(cache_path)
+        async with self._card_cache_guard:
+            lock = self._card_cache_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._card_cache_locks[key] = lock
+            return lock
+
+    def _prune_card_cache(self, cache_date: str) -> None:
+        cache_root = self.data_dir / "card_cache"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        for child in cache_root.iterdir():
+            if child.name == cache_date:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink(missing_ok=True)
+
+    @staticmethod
+    def _is_valid_cached_card(
+        cache_path: Path,
+        card_width: int,
+        card_height: int,
+    ) -> bool:
+        try:
+            with Image.open(cache_path) as cached_image:
+                return cached_image.format == "PNG" and cached_image.size == (
+                    card_width,
+                    card_height,
+                )
+        except (OSError, ValueError):
+            cache_path.unlink(missing_ok=True)
+            return False
+
+    @staticmethod
+    def _store_cached_card(image_path: str, cache_path: Path) -> str:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = cache_path.with_suffix(".png.tmp")
+        try:
+            shutil.copyfile(image_path, temporary_path)
+            temporary_path.replace(cache_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+        return str(cache_path)
+
     async def _render_template_image(
         self,
         template: str,
-        render_data: dict[str, Any],
+        card_data: dict[str, Any],
         template_pack: TemplatePack,
-    ) -> tuple[str, str]:
-        render_started = time.perf_counter()
+    ) -> tuple[str, str, float, float]:
+        prepare_ms = 0.0
+        render_ms = 0.0
         if self.render_backend != "remote" and await self.local_renderer.start():
+            prepare_started = time.perf_counter()
             try:
-                image_path = await self.local_renderer.render(
-                    template,
-                    render_data,
-                    width=template_pack.width,
-                    height=template_pack.height,
-                    template_key=template_pack.fingerprint,
+                render_data = await self._prepare_render_data(
+                    card_data,
+                    template_pack,
+                    asset_mode="local",
                 )
-                self.logger.debug(
-                    "Sign card local render completed in %.0f ms",
-                    (time.perf_counter() - render_started) * 1000,
-                )
-                return image_path, "local"
             except Exception as error:
+                prepare_ms += (time.perf_counter() - prepare_started) * 1000
                 self.logger.warning(
-                    "Local sign card rendering failed; falling back to remote T2I: %s",
+                    "Local sign asset preparation failed; falling back to remote "
+                    "T2I: %s",
                     error,
                 )
+            else:
+                prepare_ms += (time.perf_counter() - prepare_started) * 1000
+                render_started = time.perf_counter()
+                try:
+                    image_path = await self.local_renderer.render(
+                        template,
+                        render_data,
+                        width=template_pack.width,
+                        height=template_pack.height,
+                        template_key=template_pack.fingerprint,
+                        base_url=self._local_base_document(template_pack).as_uri(),
+                        clip_selector=".wrapper",
+                    )
+                except Exception as error:
+                    render_ms += (time.perf_counter() - render_started) * 1000
+                    self.logger.warning(
+                        "Local sign card rendering failed; falling back to remote "
+                        "T2I: %s",
+                        error,
+                    )
+                else:
+                    render_ms += (time.perf_counter() - render_started) * 1000
+                    self.logger.debug(
+                        "Sign card local render completed in %.0f ms",
+                        render_ms,
+                    )
+                    return image_path, "local", prepare_ms, render_ms
 
+        prepare_started = time.perf_counter()
+        render_data = await self._prepare_render_data(
+            card_data,
+            template_pack,
+            asset_mode="remote",
+        )
+        prepare_ms += (time.perf_counter() - prepare_started) * 1000
+
+        render_started = time.perf_counter()
         image_path = await self.html_render(
             template,
             render_data,
@@ -788,18 +1124,24 @@ class ZhenxunSign(Star):
                 "scale": "css",
             },
         )
+        render_ms += (time.perf_counter() - render_started) * 1000
         self.logger.debug(
             "Sign card remote render completed in %.0f ms",
-            (time.perf_counter() - render_started) * 1000,
+            render_ms,
         )
-        return image_path, "remote"
+        return image_path, "remote", prepare_ms, render_ms
 
     async def _prepare_render_data(
         self,
         card_data: dict[str, Any],
         template_pack: TemplatePack | None = None,
+        *,
+        asset_mode: str = "remote",
     ) -> dict[str, Any]:
-        sign_style, image_assets = await self._get_asset_bundle(template_pack)
+        sign_style, image_assets = await self._get_asset_bundle(
+            template_pack,
+            asset_mode=asset_mode,
+        )
         page = card_data["page"]
         tag_name = str(page.get("tag_icon_name") or "0.png")
         weather_name = str(page.get("weather_icon_name") or "0.png")
@@ -809,6 +1151,7 @@ class ZhenxunSign(Star):
             avatar_url = await self._avatar_data_uri(
                 str(user.get("avatar_source") or ""),
                 image_assets["fallback_avatar"],
+                local_assets=asset_mode == "local",
             )
         tag_fallback = next(iter(image_assets["tags"].values()))
         weather_fallback = next(iter(image_assets["weather"].values()))
@@ -836,24 +1179,37 @@ class ZhenxunSign(Star):
     async def _get_asset_bundle(
         self,
         template_pack: TemplatePack | None = None,
+        *,
+        asset_mode: str = "remote",
     ) -> tuple[str, dict[str, Any]]:
+        if asset_mode not in {"local", "remote"}:
+            raise ValueError(f"unsupported asset mode: {asset_mode}")
         pack = template_pack or self.template_registry.legacy_pack()
-        if cached := self._asset_bundles.get(pack.fingerprint):
+        cache_key = (asset_mode, pack.fingerprint)
+        if cached := self._asset_bundles.get(cache_key):
             return cached
 
         async with self._asset_lock:
-            if cached := self._asset_bundles.get(pack.fingerprint):
+            if cached := self._asset_bundles.get(cache_key):
                 return cached
-            bundle = await asyncio.to_thread(self._load_asset_bundle_sync, pack)
-            if len(self._asset_bundles) >= 12:
+            bundle = await asyncio.to_thread(
+                self._load_asset_bundle_sync,
+                pack,
+                asset_mode=asset_mode,
+            )
+            if len(self._asset_bundles) >= 24:
                 self._asset_bundles.pop(next(iter(self._asset_bundles)))
-            self._asset_bundles[pack.fingerprint] = bundle
+            self._asset_bundles[cache_key] = bundle
             return bundle
 
     def _load_asset_bundle_sync(
         self,
         template_pack: TemplatePack | None = None,
+        *,
+        asset_mode: str = "remote",
     ) -> tuple[str, dict[str, Any]]:
+        if asset_mode not in {"local", "remote"}:
+            raise ValueError(f"unsupported asset mode: {asset_mode}")
         pack = template_pack or self.template_registry.legacy_pack()
         font_paths = {
             family_name: pack.asset_path(f"fonts/{file_name}")
@@ -884,12 +1240,22 @@ class ZhenxunSign(Star):
         if avatar_path:
             requested_paths.append(avatar_path)
         payload = pack.read_many(tuple(dict.fromkeys(requested_paths)))
+        local_root = (
+            self._materialize_local_assets(pack, payload)
+            if asset_mode == "local"
+            else None
+        )
+
+        def resource_uri(relative_path: str, mime_type: str) -> str:
+            if local_root is not None:
+                return (local_root / relative_path).resolve().as_uri()
+            return self._bytes_data_uri(payload[relative_path], mime_type)
 
         font_rules = []
         for family_name, relative_path in font_paths.items():
             if relative_path not in payload:
                 continue
-            font_uri = self._bytes_data_uri(payload[relative_path], "font/woff2")
+            font_uri = resource_uri(relative_path, "font/woff2")
             font_rules.append(
                 f'@font-face {{ font-family: "{family_name}"; '
                 f'src: url("{font_uri}"); }}'
@@ -912,32 +1278,39 @@ body {
 }
 """.strip()
         official_style = payload[pack.style_file].decode("utf-8")
-        sign_style = "\n\n".join([theme_style, "\n".join(font_rules), official_style])
+        sign_style = "\n\n".join(
+            [
+                theme_style,
+                "\n".join(font_rules),
+                official_style,
+                FONT_FALLBACK_STYLE,
+            ]
+        )
 
         image_assets: dict[str, Any] = {
-            key: self._bytes_data_uri(
-                payload[relative_path],
+            key: resource_uri(
+                relative_path,
                 self._image_mime_type(Path(relative_path).suffix),
             )
             for key, relative_path in static_paths.items()
         }
         image_assets["tags"] = {
-            name: self._bytes_data_uri(
-                payload[relative_path],
+            name: resource_uri(
+                relative_path,
                 self._image_mime_type(Path(relative_path).suffix),
             )
             for name, relative_path in tag_paths.items()
         }
         image_assets["weather"] = {
-            name: self._bytes_data_uri(
-                payload[relative_path],
+            name: resource_uri(
+                relative_path,
                 self._image_mime_type(Path(relative_path).suffix),
             )
             for name, relative_path in weather_paths.items()
         }
         image_assets["template_avatar"] = (
-            self._bytes_data_uri(
-                payload[avatar_path],
+            resource_uri(
+                avatar_path,
                 self._image_mime_type(Path(avatar_path).suffix),
             )
             if avatar_path
@@ -945,50 +1318,283 @@ body {
         )
         return sign_style, image_assets
 
-    async def _avatar_data_uri(self, source: str, fallback: str) -> str:
+    def _local_asset_cache_key(self, template_pack: TemplatePack) -> str:
+        value = f"{LOCAL_ASSET_CACHE_VERSION}\0{template_pack.fingerprint}"
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def _local_asset_root(self, template_pack: TemplatePack) -> Path:
+        return (
+            self.data_dir / "render_assets" / self._local_asset_cache_key(template_pack)
+        )
+
+    def _local_base_document(self, template_pack: TemplatePack) -> Path:
+        return self._local_asset_root(template_pack) / ".base.html"
+
+    def _materialize_local_assets(
+        self,
+        template_pack: TemplatePack,
+        payload: dict[str, bytes],
+    ) -> Path:
+        target_root = self._local_asset_root(template_pack)
+        marker_text = f"{LOCAL_ASSET_CACHE_VERSION}\n{template_pack.fingerprint}\n"
+        marker_path = target_root / ".fingerprint"
+        try:
+            if (
+                marker_path.read_text(encoding="utf-8") == marker_text
+                and self._local_base_document(template_pack).is_file()
+            ):
+                return target_root
+        except OSError:
+            pass
+
+        cache_root = target_root.parent
+        cache_root.mkdir(parents=True, exist_ok=True)
+        temporary_root = cache_root / (
+            f".{target_root.name}-{uuid.uuid4().hex[:12]}.tmp"
+        )
+        temporary_root.mkdir(parents=True)
+        temporary_resolved = temporary_root.resolve()
+        try:
+            for relative_path, content in payload.items():
+                destination = (temporary_root / relative_path).resolve()
+                if not destination.is_relative_to(temporary_resolved):
+                    raise ValueError(f"asset cache path escaped: {relative_path}")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(content)
+            (temporary_root / ".base.html").write_text(
+                "<!doctype html><html><body></body></html>",
+                encoding="utf-8",
+            )
+            (temporary_root / ".fingerprint").write_text(
+                marker_text,
+                encoding="utf-8",
+            )
+            if target_root.exists():
+                shutil.rmtree(target_root)
+            temporary_root.replace(target_root)
+        finally:
+            if temporary_root.exists():
+                shutil.rmtree(temporary_root)
+        return target_root
+
+    def _prune_local_asset_cache(
+        self,
+        template_packs: tuple[TemplatePack, ...],
+    ) -> None:
+        cache_root = self.data_dir / "render_assets"
+        if not cache_root.is_dir():
+            return
+        retained = {
+            self._local_asset_cache_key(template_pack)
+            for template_pack in template_packs
+        }
+        for child in cache_root.iterdir():
+            if child.name in retained:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink(missing_ok=True)
+
+    async def _avatar_data_uri(
+        self,
+        source: str,
+        fallback: str,
+        *,
+        local_assets: bool = False,
+    ) -> str:
         if not source:
             return fallback
         if source.startswith("data:image/"):
             return source
-        if cached := self._avatar_cache.get(source):
-            return cached
 
+        mode = "local" if local_assets else "remote"
+        cache_key = f"{mode}:{source}"
+        now = time.time()
+        cached = self._avatar_cache.get(cache_key)
+        if cached and cached[0] > now:
+            return cached[1]
+        self._avatar_cache.pop(cache_key, None)
+
+        cached_file = (
+            self._avatar_cache_file(source)
+            if source.startswith(("http://", "https://"))
+            else None
+        )
+        if cached_file and self._is_fresh_avatar_file(cached_file, now):
+            avatar = await self._avatar_file_uri(cached_file, local_assets)
+            self._remember_avatar(cache_key, avatar, now)
+            return avatar
+
+        failed_at = self._avatar_failures.get(source, 0.0)
+        if failed_at and now - failed_at < AVATAR_FAILURE_RETRY_SECONDS:
+            if cached_file and cached_file.is_file():
+                return await self._avatar_file_uri(cached_file, local_assets)
+            return fallback
+
+        avatar_started = time.perf_counter()
         try:
             local_path = Path(source).expanduser()
             if not local_path.is_absolute():
                 local_path = Path(__file__).parent / local_path
             if local_path.is_file():
-                mime_type = self._image_mime_type(local_path.suffix)
-                avatar = await asyncio.to_thread(
-                    self._path_data_uri,
-                    local_path,
-                    mime_type,
-                )
+                if local_assets:
+                    avatar = local_path.resolve().as_uri()
+                else:
+                    mime_type = self._image_mime_type(local_path.suffix)
+                    avatar = await asyncio.to_thread(
+                        self._path_data_uri,
+                        local_path,
+                        mime_type,
+                    )
             elif source.startswith(("http://", "https://")):
-                timeout = aiohttp.ClientTimeout(total=8)
-                async with (
-                    aiohttp.ClientSession(timeout=timeout, trust_env=True) as session,
-                    session.get(source, allow_redirects=True) as response,
-                ):
-                    response.raise_for_status()
-                    content = await response.content.read(MAX_AVATAR_BYTES + 1)
-                    if len(content) > MAX_AVATAR_BYTES:
-                        raise ValueError("avatar exceeds size limit")
-                    mime_type = response.headers.get("Content-Type", "image/png")
-                    mime_type = mime_type.split(";", 1)[0].strip().lower()
-                    if not mime_type.startswith("image/"):
-                        raise ValueError("avatar response is not an image")
-                    avatar = self._bytes_data_uri(content, mime_type)
+                avatar = await self._download_avatar_uri(source, local_assets)
             else:
                 return fallback
         except Exception as error:
-            self.logger.debug("Avatar loading failed: %s", error)
+            self._avatar_failures[source] = time.time()
+            self.logger.debug(
+                "Avatar loading failed after %.0f ms: %s",
+                (time.perf_counter() - avatar_started) * 1000,
+                error,
+            )
+            if cached_file and cached_file.is_file():
+                return await self._avatar_file_uri(cached_file, local_assets)
             return fallback
 
-        if len(self._avatar_cache) >= 128:
-            self._avatar_cache.pop(next(iter(self._avatar_cache)))
-        self._avatar_cache[source] = avatar
+        self._avatar_failures.pop(source, None)
+        self._remember_avatar(cache_key, avatar, time.time())
+        self.logger.debug(
+            "Avatar loaded in %.0f ms",
+            (time.perf_counter() - avatar_started) * 1000,
+        )
         return avatar
+
+    def _remember_avatar(self, cache_key: str, avatar: str, now: float) -> None:
+        if len(self._avatar_cache) >= 256:
+            self._avatar_cache.pop(next(iter(self._avatar_cache)))
+        self._avatar_cache[cache_key] = (
+            now + AVATAR_MEMORY_CACHE_SECONDS,
+            avatar,
+        )
+
+    def _avatar_cache_file(self, source: str) -> Path:
+        digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+        return self.data_dir / "avatar_cache" / f"{digest}.image"
+
+    @staticmethod
+    def _is_fresh_avatar_file(cache_path: Path, now: float) -> bool:
+        try:
+            return now - cache_path.stat().st_mtime < AVATAR_CACHE_TTL_SECONDS
+        except OSError:
+            return False
+
+    async def _avatar_file_uri(
+        self,
+        cache_path: Path,
+        local_assets: bool,
+    ) -> str:
+        if local_assets:
+            return cache_path.resolve().as_uri()
+        return await asyncio.to_thread(self._avatar_file_data_uri, cache_path)
+
+    @staticmethod
+    def _avatar_file_data_uri(cache_path: Path) -> str:
+        with Image.open(cache_path) as image:
+            mime_type = Image.MIME.get(image.format or "", "image/png")
+        return ZhenxunSign._bytes_data_uri(cache_path.read_bytes(), mime_type)
+
+    async def _download_avatar_uri(
+        self,
+        source: str,
+        local_assets: bool,
+    ) -> str:
+        cache_path = self._avatar_cache_file(source)
+        if source not in self._avatar_locks and len(self._avatar_locks) >= 256:
+            removable = next(
+                (
+                    key
+                    for key, candidate in self._avatar_locks.items()
+                    if not candidate.locked()
+                ),
+                None,
+            )
+            if removable is not None:
+                self._avatar_locks.pop(removable, None)
+        lock = self._avatar_locks.setdefault(source, asyncio.Lock())
+        async with lock:
+            if self._is_fresh_avatar_file(cache_path, time.time()):
+                return await self._avatar_file_uri(cache_path, local_assets)
+
+            session = await self._get_avatar_session()
+            async with session.get(source, allow_redirects=True) as response:
+                response.raise_for_status()
+                content = await response.content.read(MAX_AVATAR_BYTES + 1)
+                if len(content) > MAX_AVATAR_BYTES:
+                    raise ValueError("avatar exceeds size limit")
+                response_mime = response.headers.get("Content-Type", "")
+                response_mime = response_mime.split(";", 1)[0].strip().lower()
+                if response_mime and not response_mime.startswith("image/"):
+                    raise ValueError("avatar response is not an image")
+                mime_type = await asyncio.to_thread(
+                    self._validate_avatar_bytes,
+                    content,
+                )
+                await asyncio.to_thread(
+                    self._write_avatar_cache,
+                    cache_path,
+                    content,
+                )
+
+            if local_assets:
+                return cache_path.resolve().as_uri()
+            return self._bytes_data_uri(content, mime_type)
+
+    async def _get_avatar_session(self) -> aiohttp.ClientSession:
+        session = self._avatar_session
+        if session is not None and not session.closed:
+            return session
+        async with self._avatar_session_lock:
+            session = self._avatar_session
+            if session is None or session.closed:
+                timeout = aiohttp.ClientTimeout(total=AVATAR_TIMEOUT_SECONDS)
+                session = aiohttp.ClientSession(timeout=timeout, trust_env=True)
+                self._avatar_session = session
+            return session
+
+    @staticmethod
+    def _validate_avatar_bytes(content: bytes) -> str:
+        with Image.open(BytesIO(content)) as image:
+            image_format = image.format or ""
+            image.verify()
+        return Image.MIME.get(image_format, "image/png")
+
+    @staticmethod
+    def _write_avatar_cache(cache_path: Path, content: bytes) -> None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = cache_path.with_name(
+            f".{cache_path.name}-{uuid.uuid4().hex[:12]}.tmp"
+        )
+        try:
+            temporary_path.write_bytes(content)
+            temporary_path.replace(cache_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+
+    def _prune_avatar_cache(self) -> None:
+        cache_root = self.data_dir / "avatar_cache"
+        if not cache_root.is_dir():
+            return
+        now = time.time()
+        for cache_path in cache_root.iterdir():
+            try:
+                expired = (
+                    now - cache_path.stat().st_mtime >= AVATAR_CACHE_RETENTION_SECONDS
+                )
+            except OSError:
+                expired = True
+            if expired and cache_path.is_file():
+                cache_path.unlink(missing_ok=True)
 
     def _avatar_source(
         self,

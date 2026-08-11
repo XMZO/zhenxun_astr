@@ -51,6 +51,146 @@
     ],
     "default": "auto"
   },
+  "image_cache": {
+    "type": "object",
+    "description": "每日图片缓存",
+    "hint": "同一用户当天复用首次图片。",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "启用每日缓存",
+        "hint": "次日自动清理旧图片。",
+        "default": true
+      }
+    }
+  },
+  "favour_integration": {
+    "type": "object",
+    "description": "好感度联动",
+    "hint": "可选好感联动。",
+    "items": {
+      "provider": {
+        "type": "string",
+        "description": "联动插件",
+        "options": [
+          "none",
+          "favour_ultra"
+        ],
+        "labels": [
+          "关闭联动",
+          "Favour Ultra"
+        ],
+        "default": "none"
+      },
+      "mode": {
+        "type": "string",
+        "description": "联动模式",
+        "condition": {
+          "provider": "favour_ultra"
+        },
+        "options": [
+          "display_reward",
+          "display_only"
+        ],
+        "labels": [
+          "显示并奖励",
+          "仅显示"
+        ],
+        "default": "display_reward"
+      },
+      "reward_mode": {
+        "type": "string",
+        "description": "签到增加方式",
+        "condition": {
+          "provider": "favour_ultra",
+          "mode": "display_reward"
+        },
+        "options": [
+          "fixed",
+          "random"
+        ],
+        "labels": [
+          "固定数值",
+          "随机范围"
+        ],
+        "default": "fixed"
+      },
+      "reward_value": {
+        "type": "int",
+        "description": "固定增加值",
+        "condition": {
+          "provider": "favour_ultra",
+          "mode": "display_reward",
+          "reward_mode": "fixed"
+        },
+        "default": 1
+      },
+      "reward_min": {
+        "type": "int",
+        "description": "随机下限",
+        "condition": {
+          "provider": "favour_ultra",
+          "mode": "display_reward",
+          "reward_mode": "random"
+        },
+        "default": 1
+      },
+      "reward_max": {
+        "type": "int",
+        "description": "随机上限",
+        "condition": {
+          "provider": "favour_ultra",
+          "mode": "display_reward",
+          "reward_mode": "random"
+        },
+        "default": 3
+      },
+      "touch_interaction": {
+        "type": "bool",
+        "description": "刷新互动时间",
+        "hint": "签到计入活跃时间。",
+        "condition": {
+          "provider": "favour_ultra",
+          "mode": "display_reward"
+        },
+        "default": true
+      },
+      "attitude_source": {
+        "type": "string",
+        "description": "态度文字来源",
+        "condition": {
+          "provider": "favour_ultra"
+        },
+        "options": [
+          "relationship_or_level",
+          "level",
+          "relationship"
+        ],
+        "labels": [
+          "关系优先",
+          "好感等级",
+          "关系名称"
+        ],
+        "default": "relationship_or_level"
+      },
+      "heart_mode": {
+        "type": "string",
+        "description": "爱心填充算法",
+        "condition": {
+          "provider": "favour_ultra"
+        },
+        "options": [
+          "level",
+          "range"
+        ],
+        "labels": [
+          "按等级进度",
+          "按全局范围"
+        ],
+        "default": "level"
+      }
+    }
+  },
   "command_prefix_mode": {
     "type": "string",
     "description": "指令前缀",

@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,8 @@ class LocalRenderUnavailable(RuntimeError):
 class LocalHtmlRenderer:
     """Render sign templates in a reused local Chromium instance."""
 
-    _IMAGE_WAIT_SECONDS = 2.0
-    _FONT_WAIT_SECONDS = 2.0
+    _IMAGE_WAIT_SECONDS = 1.8
+    _FONT_WAIT_SECONDS = 1.2
     _MAX_CONCURRENT_PAGES = 4
 
     def __init__(self, logger: Any) -> None:
@@ -112,6 +113,8 @@ class LocalHtmlRenderer:
         width: int,
         height: int,
         template_key: str,
+        base_url: str | None = None,
+        clip_selector: str | None = ".wrapper",
     ) -> str:
         if not await self.start():
             reason = self._failure or "browser is unavailable"
@@ -119,14 +122,23 @@ class LocalHtmlRenderer:
         if not self.available:
             raise LocalRenderUnavailable("browser is disconnected")
 
+        render_started = time.perf_counter()
+        stage_started = render_started
         rendered_html = await self._render_template(template, data, template_key)
+        template_ms = (time.perf_counter() - stage_started) * 1000
         async with self._render_semaphore:
             page = None
             try:
+                stage_started = time.perf_counter()
                 page = await self._context.new_page()
                 await page.set_viewport_size(
                     {"width": max(64, int(width)), "height": max(64, int(height))}
                 )
+                if base_url:
+                    await page.goto(base_url, wait_until="commit", timeout=10_000)
+                page_ms = (time.perf_counter() - stage_started) * 1000
+
+                stage_started = time.perf_counter()
                 await page.set_content(
                     rendered_html,
                     wait_until="domcontentloaded",
@@ -142,12 +154,37 @@ class LocalHtmlRenderer:
 }
 """
                 )
+                content_ms = (time.perf_counter() - stage_started) * 1000
+
+                stage_started = time.perf_counter()
                 await self._wait_for_visual_stability(page)
+                wait_ms = (time.perf_counter() - stage_started) * 1000
+
+                stage_started = time.perf_counter()
                 output_path = self._new_output_path()
-                await page.screenshot(
-                    path=str(output_path),
-                    full_page=True,
-                    type="png",
+                element = (
+                    await page.query_selector(clip_selector) if clip_selector else None
+                )
+                if element is not None:
+                    await element.screenshot(path=str(output_path), type="png")
+                else:
+                    await page.screenshot(
+                        path=str(output_path),
+                        full_page=True,
+                        type="png",
+                    )
+                screenshot_ms = (time.perf_counter() - stage_started) * 1000
+                self.logger.debug(
+                    "Local sign render stages: template=%.0f ms, page=%.0f ms, "
+                    "content=%.0f ms, wait=%.0f ms, screenshot=%.0f ms, "
+                    "html=%.1f KiB, total=%.0f ms",
+                    template_ms,
+                    page_ms,
+                    content_ms,
+                    wait_ms,
+                    screenshot_ms,
+                    len(rendered_html.encode("utf-8")) / 1024,
+                    (time.perf_counter() - render_started) * 1000,
                 )
                 return str(output_path)
             except Exception:
@@ -197,6 +234,12 @@ class LocalHtmlRenderer:
             ) from error
 
     async def _wait_for_visual_stability(self, page: Any) -> None:
+        await asyncio.gather(
+            self._wait_for_images(page),
+            self._wait_for_fonts(page),
+        )
+
+    async def _wait_for_images(self, page: Any) -> None:
         try:
             await page.wait_for_function(
                 "() => Array.from(document.images || []).every(image => image.complete)",
@@ -205,6 +248,7 @@ class LocalHtmlRenderer:
         except Exception:
             pass
 
+    async def _wait_for_fonts(self, page: Any) -> None:
         try:
             await asyncio.wait_for(
                 page.evaluate(
