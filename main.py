@@ -7,6 +7,8 @@ import random
 import shutil
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -15,7 +17,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiohttp
 from astrbot.api import AstrBotConfig
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.message_components import Reply
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from PIL import Image
@@ -105,7 +108,7 @@ AVATAR_CACHE_TTL_SECONDS = 60 * 60
 AVATAR_CACHE_RETENTION_SECONDS = 30 * 24 * 60 * 60
 AVATAR_FAILURE_RETRY_SECONDS = 5 * 60
 AVATAR_MEMORY_CACHE_SECONDS = 5 * 60
-CARD_CACHE_VERSION = "2"
+CARD_CACHE_VERSION = "3"
 LOCAL_ASSET_CACHE_VERSION = "1"
 TEMPLATE_UPLOAD_PREFIX = "files/template_management/packages/"
 SIGN_COMMAND_NAMES = ("签到", "打卡")
@@ -116,6 +119,7 @@ COMMAND_PREFIXES = {
     "hash": "#",
 }
 RENDER_BACKENDS = {"auto", "local", "remote"}
+REPLY_QUOTE_MODES = {"never", "global", "always"}
 _runtime_command_prefix = "/"
 
 
@@ -132,6 +136,11 @@ def _resolve_command_prefix(config: dict[str, Any]) -> str:
 def _resolve_render_backend(config: dict[str, Any]) -> str:
     backend = str(config.get("render_backend", "auto") or "auto").lower()
     return backend if backend in RENDER_BACKENDS else "auto"
+
+
+def _resolve_reply_quote_mode(config: dict[str, Any]) -> str:
+    mode = str(config.get("reply_quote_mode", "never") or "never").lower()
+    return mode if mode in REPLY_QUOTE_MODES else "never"
 
 
 def _set_runtime_command_prefix(prefix: str) -> None:
@@ -165,6 +174,13 @@ class _InfoCommandFilter(filter.CustomFilter):
         return _matches_configured_command(event, INFO_COMMAND_NAMES)
 
 
+class _ReplySuppressingChain(list[Any]):
+    def insert(self, index: int, component: Any) -> None:
+        if isinstance(component, Reply):
+            return
+        super().insert(index, component)
+
+
 class ZhenxunSign(Star):
     """AstrBot implementation of the basic zhenxun sign-in flow."""
 
@@ -177,6 +193,7 @@ class ZhenxunSign(Star):
         self.config = config if config is not None else {}
         self.command_prefix = _resolve_command_prefix(self.config)
         self.render_backend = _resolve_render_backend(self.config)
+        self.reply_quote_mode = _resolve_reply_quote_mode(self.config)
         _set_runtime_command_prefix(self.command_prefix)
         self.timezone_name = str(
             self.config.get("timezone", "Asia/Shanghai") or "Asia/Shanghai"
@@ -264,6 +281,44 @@ class ZhenxunSign(Star):
             self._avatar_session = None
         await self.local_renderer.close()
 
+    @contextmanager
+    def _reply_quote_scope(
+        self,
+        event: AstrMessageEvent,
+        result: Any,
+    ) -> Iterator[None]:
+        if self.reply_quote_mode == "never" and isinstance(result, MessageChain):
+            result.chain = _ReplySuppressingChain(
+                component
+                for component in result.chain
+                if not isinstance(component, Reply)
+            )
+        if self.reply_quote_mode == "global":
+            yield
+            return
+
+        original_send = event.send
+
+        async def send_with_reply_policy(message: MessageChain | None) -> None:
+            if isinstance(message, MessageChain):
+                chain = [
+                    component
+                    for component in message.chain
+                    if not isinstance(component, Reply)
+                ]
+                if self.reply_quote_mode == "always":
+                    message_id = getattr(event.message_obj, "message_id", None)
+                    if message_id not in (None, ""):
+                        chain.insert(0, Reply(id=message_id))
+                message = message.derive(chain)
+            await original_send(message)
+
+        event.send = send_with_reply_policy
+        try:
+            yield
+        finally:
+            event.send = original_send
+
     @filter.custom_filter(_SignCommandFilter)
     async def sign(self, event: AstrMessageEvent):
         """Record today's sign-in and return the original zhenxun-style card."""
@@ -302,13 +357,15 @@ class ZhenxunSign(Star):
             is_new_sign,
             favour_snapshot.reward_delta,
         )
-        yield await self._render_or_text(
+        result = await self._render_or_text(
             event,
             card_data,
             template_pack,
             cache_identity=storage_key,
             cache_date=current_time.date().isoformat(),
         )
+        with self._reply_quote_scope(event, result):
+            yield result
 
     @filter.custom_filter(_InfoCommandFilter)
     async def my_sign(self, event: AstrMessageEvent):
@@ -335,13 +392,15 @@ class ZhenxunSign(Star):
             favour_snapshot=favour_snapshot,
         )
         self.logger.info("My sign command handled: user=%s", user_id)
-        yield await self._render_or_text(
+        result = await self._render_or_text(
             event,
             card_data,
             template_pack,
             cache_identity=storage_key,
             cache_date=current_time.date().isoformat(),
         )
+        with self._reply_quote_scope(event, result):
+            yield result
 
     def _import_configured_template_packages(self) -> None:
         report: dict[str, Any] = {

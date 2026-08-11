@@ -19,7 +19,7 @@ class FavourIntegrationSettings:
     reward_max: int = 3
     touch_interaction: bool = True
     heart_mode: str = "level"
-    attitude_source: str = "relationship_or_level"
+    attitude_source: str = "zhenxun"
 
     @classmethod
     def from_plugin_config(
@@ -51,16 +51,15 @@ class FavourIntegrationSettings:
         if heart_mode not in {"level", "range"}:
             heart_mode = "level"
 
-        attitude_source = str(
-            configured.get("attitude_source", "relationship_or_level")
-            or "relationship_or_level"
-        )
+        attitude_source = str(configured.get("attitude_source", "zhenxun") or "zhenxun")
+        if attitude_source == "relationship_or_level":
+            attitude_source = "zhenxun"
         if attitude_source not in {
-            "relationship_or_level",
+            "zhenxun",
             "relationship",
             "level",
         }:
-            attitude_source = "relationship_or_level"
+            attitude_source = "zhenxun"
 
         return cls(
             provider=provider,

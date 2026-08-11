@@ -64,6 +64,22 @@
       }
     }
   },
+  "reply_quote_mode": {
+    "type": "string",
+    "description": "引用发送人消息",
+    "hint": "仅影响本插件，不改全局。",
+    "options": [
+      "never",
+      "global",
+      "always"
+    ],
+    "labels": [
+      "不引用（推荐）",
+      "跟随 AstrBot 全局",
+      "始终引用"
+    ],
+    "default": "never"
+  },
   "favour_integration": {
     "type": "object",
     "description": "好感度联动",
@@ -162,16 +178,16 @@
           "provider": "favour_ultra"
         },
         "options": [
-          "relationship_or_level",
+          "zhenxun",
           "level",
           "relationship"
         ],
         "labels": [
-          "关系优先",
-          "好感等级",
+          "真寻九级态度（推荐）",
+          "Favour 等级名",
           "关系名称"
         ],
-        "default": "relationship_or_level"
+        "default": "zhenxun"
       },
       "heart_mode": {
         "type": "string",
@@ -184,7 +200,7 @@
           "range"
         ],
         "labels": [
-          "按等级进度",
+          "按真寻等级",
           "按全局范围"
         ],
         "default": "level"

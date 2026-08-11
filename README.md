@@ -88,7 +88,7 @@ AstrBot 的远程 T2I 服务不能读取插件机器上的 `file://` 路径，�
 
 卡片的品牌名称、日期格式、头像、标题、问候语、奖励/信息文字、早晚文案池和底部预留区都由当前模板决定，不占用 AstrBot 插件配置。默认模板保存在根目录的 `template_settings.json`，自定义模板保存在各自 `template.json` 的 `settings` 中，因此切换模板会同时切换文字与素材。
 
-推荐使用可视化编辑器修改这些内容并生成新模板包。AstrBot 设置页只保留模板安装与选择、指令前缀、签到时区、UID 隐私、好感度联动和奖励预留等运行参数。昵称、签到次数、日期、金币和可选好感度快照等实时数据仍由插件在渲染时传入模板。
+推荐使用可视化编辑器修改这些内容并生成新模板包。AstrBot 设置页只保留模板安装与选择、指令前缀、引用策略、签到时区、UID 隐私、好感度联动和奖励预留等运行参数。昵称、签到次数、日期、金币和可选好感度快照等实时数据仍由插件在渲染时传入模板。
 
 “显示真实 ID”开启时，卡片 UID 使用发送者 ID（填写“固定 UID”时沿用固定值）；关闭时不显示真实 ID，而是使用插件为用户首次建档分配的全局递增内部序号，并按 `0000 0000 0001` 的格式显示。这个序号保存在 `sign_data.json` 中，重启和跨年不会改变。
 
@@ -96,14 +96,18 @@ AstrBot 的远程 T2I 服务不能读取插件机器上的 `file://` 路径，�
 
 “指令前缀”默认选择 `/ 斜杠`，此时发送 `/签到`、`/打卡`、`/我的签到` 或 `/签到状态`。也可以选择“无前缀”后直接发送 `签到`，选择 `# 井号` 后发送 `#签到`，或填写最长 16 个非空白字符的自定义前缀。该设置只影响本插件，不修改 AstrBot 全局唤醒前缀。
 
+## 引用回复
+
+“引用发送人消息”只控制本插件的签到卡片和文字回退，不修改 AstrBot 全局设置。“不引用”会移除全局装饰阶段加入的引用；“跟随 AstrBot 全局”保持原行为；“始终引用”会使用本次指令的消息 ID。该策略只包裹当前签到事件的最终发送，随后立即恢复，不会影响其他插件或并发会话。
+
 ## 本地预览与修改
 
-可视化编辑器保存在同一仓库的 [`editor-v0.5.0` 标签](https://github.com/XMZO/zhenxun_astr/tree/editor-v0.5.0)，不会随 AstrBot 的默认分支安装。它支持实时预览、素材替换、图层选框、拖动、八向拉伸、撤销/重做和恢复原版。
+可视化编辑器保存在同一仓库的 [`editor-v0.5.1` 标签](https://github.com/XMZO/zhenxun_astr/tree/editor-v0.5.1)，不会随 AstrBot 的默认分支安装。它支持实时预览、素材替换、图层选框、拖动、八向拉伸、撤销/重做和恢复原版。
 
 单独获取编辑器：
 
 ```powershell
-git clone --branch editor-v0.5.0 --single-branch https://github.com/XMZO/zhenxun_astr.git
+git clone --branch editor-v0.5.1 --single-branch https://github.com/XMZO/zhenxun_astr.git
 cd zhenxun_astr
 cd template_editor
 uv run editor_server.py
@@ -121,7 +125,7 @@ uv run editor_server.py
 
 ## 基础预览服务器
 
-直接双击 `sign_card.html` 看不到最终效果，因为它是带 Jinja 变量的模板，图片和字体也会在运行时注入。`editor-v0.5.0` 标签提供了一个不依赖 AstrBot 的本地预览服务器；先按上一节获取该版本，再在仓库根目录运行：
+直接双击 `sign_card.html` 看不到最终效果，因为它是带 Jinja 变量的模板，图片和字体也会在运行时注入。`editor-v0.5.1` 标签提供了一个不依赖 AstrBot 的本地预览服务器；先按上一节获取该版本，再在仓库根目录运行：
 
 ```powershell
 uv run --with jinja2 preview.py
@@ -149,7 +153,8 @@ uv run --with jinja2 preview.py
 - “仅显示”只读取数值，不修改对方插件数据。
 - 奖励支持固定值或随机范围；写入仍遵守 `Favour_Ultra` 的好感度上下限。
 - “刷新互动时间”开启时，签到会更新对方插件的最后互动时间，从而参与其自然衰减判断。
-- 态度行可以优先显示关系、只显示等级或只显示关系；爱心可以按等级位置或完整数值范围计算。
+- 默认把 Favour Ultra 的等级位置映射到真寻原版九级关系与态度。例如“普通”映射为等级 `4 [熟悉]`、态度“是个好人”，不会再让两行显示同一个词。
+- 态度来源也可改为 Favour Ultra 原始等级名或其独立关系字段；爱心可以按真寻等级或完整数值范围计算。
 
 兼容代码完全位于本插件的 `integrations` 目录，不修改、不复制 `Favour_Ultra` 的数据库。运行时通过 AstrBot 查找已加载实例，并沿用对方插件的用户 ID、全局/会话作用域、初始值、边界和会话同步逻辑。当前 `Favour_Ultra` 的“全局好感度”实际按适配器共享，例如所有 QQ 群聊和私聊共同使用 `aiocqhttp` 记录；这与本插件按“平台＋用户”每日签到一次的判重方式一致。
 
@@ -157,12 +162,13 @@ uv run --with jinja2 preview.py
 
 模板可以使用以下好感度占位符：
 
-- `{favour}`、`{favour_level}`、`{favour_level_min}`、`{favour_level_max}`
-- `{favour_relationship}`、`{favour_attitude}`
+- `{favour}`、`{favour_level}`、`{favour_provider_level}`
+- `{favour_zhenxun_level}`、`{favour_zhenxun_relation}`
+- `{favour_level_min}`、`{favour_level_max}`、`{favour_relationship}`、`{favour_attitude}`
 - `{favour_next}`、`{favour_next_level}`、`{favour_progress}`
 - `{favour_delta}`、`{favour_status}`、`{favour_available}`、`{favour_is_max}`
 
-默认模板和编辑器生成的新模板已经使用这些变量。旧模板中完全等于 `--`、`未接入`、`对你的态度: 未接入` 和 `距离升级还差--好感度` 的原占位内容，会在联动成功时自动替换为动态值；其他自定义文字保持不变。本插件不提供好感度排行，也不在自己的签到数据中复制保存好感度。
+`{favour_level}` 保持真寻原版的 `等级 [关系]` 格式；需要显示 Favour Ultra 的“普通”“喜欢”等原始分级时使用 `{favour_provider_level}`。默认模板和编辑器生成的新模板已经使用这些变量。旧模板中完全等于 `--`、`未接入`、`对你的态度: 未接入` 和 `距离升级还差--好感度` 的原占位内容，会在联动成功时自动替换为动态值；其他自定义文字保持不变。本插件不提供好感度排行，也不在自己的签到数据中复制保存好感度。
 
 ## 金币与道具预留
 
