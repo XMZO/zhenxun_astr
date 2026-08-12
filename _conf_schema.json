@@ -61,6 +61,12 @@
         "description": "启用每日缓存",
         "hint": "次日自动清理旧图片。",
         "default": true
+      },
+      "clear_now": {
+        "type": "bool",
+        "description": "清空现有缓存",
+        "hint": "保存后执行并自动关闭。",
+        "default": false
       }
     }
   },

@@ -108,7 +108,7 @@ AVATAR_CACHE_TTL_SECONDS = 60 * 60
 AVATAR_CACHE_RETENTION_SECONDS = 30 * 24 * 60 * 60
 AVATAR_FAILURE_RETRY_SECONDS = 5 * 60
 AVATAR_MEMORY_CACHE_SECONDS = 5 * 60
-CARD_CACHE_VERSION = "3"
+CARD_CACHE_VERSION = "4"
 LOCAL_ASSET_CACHE_VERSION = "1"
 TEMPLATE_UPLOAD_PREFIX = "files/template_management/packages/"
 SIGN_COMMAND_NAMES = ("签到", "打卡")
@@ -251,6 +251,7 @@ class ZhenxunSign(Star):
         )
         await asyncio.to_thread(self._prune_avatar_cache)
         self._sync_template_schema(packs)
+        await self._clear_card_cache_if_requested()
         if self._image_cache_enabled():
             await self._prepare_card_cache(
                 datetime.now(self.timezone).date().isoformat()
@@ -1050,12 +1051,43 @@ class ZhenxunSign(Star):
                         (card_data or {}).get("gold_balance"),
                         (card_data or {}).get("inventory"),
                         (card_data or {}).get("favour_cache_token"),
+                        (card_data or {}).get("mode"),
+                        (card_data or {}).get("is_card_view"),
                     )
                 ),
             )
         )
         digest = hashlib.sha256(variant.encode("utf-8")).hexdigest()
         return self.data_dir / "card_cache" / cache_date / f"{digest}.png"
+
+    async def _clear_card_cache_if_requested(self) -> None:
+        configured = self.config.get("image_cache", {})
+        if not isinstance(configured, dict) or not bool(
+            configured.get("clear_now", False)
+        ):
+            return
+
+        try:
+            async with self._card_cache_guard:
+                await asyncio.to_thread(self._clear_card_cache)
+                self._card_cache_locks.clear()
+                self._card_cache_day = ""
+        except OSError as error:
+            self.logger.warning("Sign card cache could not be cleared: %s", error)
+            return
+
+        configured["clear_now"] = False
+        save_config = getattr(self.config, "save_config", None)
+        if callable(save_config):
+            save_config()
+        self.logger.info("Sign card cache cleared from plugin settings")
+
+    def _clear_card_cache(self) -> None:
+        cache_root = self.data_dir / "card_cache"
+        if cache_root.is_dir():
+            shutil.rmtree(cache_root)
+        elif cache_root.exists():
+            cache_root.unlink()
 
     async def _prepare_card_cache(self, cache_date: str) -> None:
         async with self._card_cache_guard:
